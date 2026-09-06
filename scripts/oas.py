@@ -17,7 +17,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 MODES = ('development', 'research', 'ops', 'tutor', 'unattended')
-AGENTS = ('codex', 'claude', 'cursor', 'gemini', 'copilot', 'generic')
+AGENTS = ('codex', 'claude', 'cursor', 'gemini', 'copilot', 'opencode', 'generic')
 
 
 def merge(base, overlay):
@@ -108,6 +108,8 @@ def command(agent, mode, workspace, task):
         return args + [message]
     if agent == 'gemini':
         return ['gemini', '--sandbox', '--approval-mode', 'plan' if mode == 'tutor' else 'default', '--prompt-interactive', message]
+    if agent == 'opencode':
+        return ['opencode', str(workspace), '--agent', 'plan' if mode == 'tutor' else 'build', '--prompt', message]
     args = ['copilot', '--mode', 'plan' if mode == 'tutor' else 'interactive']
     if mode == 'tutor':
         args += ['--deny-tool', 'write', '--deny-tool', 'shell']
@@ -209,7 +211,7 @@ def bundle(mode, agent, output, task):
     folder.mkdir(parents=True, exist_ok=False)
     name = {'codex':'AGENTS.md', 'claude':'CLAUDE.md', 'gemini':'GEMINI.md',
             'copilot':'.github/copilot-instructions.md', 'cursor':'.cursor/rules/owen-agent-system.mdc',
-            'generic':'AGENTS.md'}[agent]
+            'opencode':'AGENTS.md', 'generic':'AGENTS.md'}[agent]
     content = prompt(mode, task)
     if agent == 'cursor':
         content = '---\ndescription: Owen working system\nalwaysApply: true\n---\n\n' + content

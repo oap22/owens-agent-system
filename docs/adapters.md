@@ -26,3 +26,7 @@ Unattended launch is implemented only for Codex's explicit no-escalation profile
 Agent switches should use the task contract and handoff artifact, not copy a whole private transcript. The next agent verifies current files and evidence rather than trusting the previous agent's completion claim. Specialist roles are native Codex definitions today; other agents can use the same role contracts through their own delegation facilities when authorized.
 
 All adapters inherit existing runtime configuration and credentials. Copilot allow-all/autopilot environment overrides are explicitly rejected, but project/global tool grants in any client still need inspection. Plan/ask modes can allow internal planning artifacts and tool-specific behavior; they are not an OS-level write barrier over arbitrary connectors.
+
+OpenCode now has a launch adapter (`--agent opencode`) and global guidance at `~/.config/opencode/AGENTS.md`. Development uses its built-in build agent; tutoring uses plan. Native permission defaults are applied by the local setup script, not by Codex TOML. Installed OpenCode 1.16.2 launch options and resolved configuration were checked during setup. No cross-provider model execution is implied.
+
+The local setup also installs global guidance for all six agents. Gemini 0.58.0 and GitHub Copilot CLI 1.0.83 are now installed locally; this supersedes the initial build's absent-executable status. Authentication and an actual task remain separate checks.

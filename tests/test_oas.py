@@ -86,7 +86,7 @@ class OASTest(unittest.TestCase):
         self.assertIn('--deny-tool', oas.command('copilot', 'tutor', self.root, 'Teach me'))
 
     def test_unattended_unsupported_fails_closed(self):
-        for agent in ('claude', 'cursor', 'gemini', 'copilot'):
+        for agent in ('claude', 'cursor', 'gemini', 'copilot', 'opencode'):
             with self.assertRaises(ValueError):
                 oas.command(agent, 'unattended', self.root, 'job')
 

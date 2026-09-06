@@ -60,3 +60,7 @@ Run `python3 -m unittest discover -s tests -v` and `python3 scripts/oas.py check
 The initial defaults are evidence-informed, not demonstrated optimal. Judge them against your own completed tasks using [[evals/README]]. Never promote a prompt change solely because its author says it improved.
 
 See [[docs/architecture]], [[docs/permissions]], [[docs/setup]], and [[docs/personalization]] for the design and adoption path.
+
+## Use it in your normal agent sessions
+
+Run `python3 scripts/setup.py` to preview global setup, then `python3 scripts/setup.py --apply` from the permanent clone. This installs shared guidance for Codex, Claude Code, Cursor, Gemini CLI, GitHub Copilot CLI, and OpenCode, preserves existing personal instructions, and creates local backups. See [[docs/setup]] for permission changes, login requirements, and rollback.

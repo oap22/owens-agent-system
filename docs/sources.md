@@ -23,3 +23,5 @@ Owen-specific design choices: three child slots, a separate tutoring mode, draft
 - [Cursor rules](https://prod.cursor.com/help/customization/rules): project rule discovery. CLI flags additionally checked in installed Cursor Agent help, including sandbox, ask mode, and auto-review.
 
 Instruction bundles use native filenames and the generic AGENTS.md convention. Supporting a filename or generating an argument list is not proof of successful model execution or permission parity across vendors.
+
+Local setup sources: [Claude global instructions](https://code.claude.com/docs/en/memory), [Gemini global context](https://geminicli.com/docs/cli/gemini-md/), [Copilot user instructions](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-custom-instructions), [Cursor local user rules](https://prod.cursor.com/help/customization/rules), [OpenCode global rules](https://opencode.ai/docs/rules/), and [OpenCode permissions](https://opencode.ai/docs/permissions/). The setup follows native discovery paths and keeps permission implementations separate.
