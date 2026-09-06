@@ -18,6 +18,18 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 MODES = ('development', 'research', 'ops', 'tutor', 'unattended')
 AGENTS = ('codex', 'claude', 'cursor', 'gemini', 'copilot', 'opencode', 'generic')
+# Markers and native global instruction paths shared with scripts/setup.py.
+MANAGED_START = '<!-- owens-agent-system:start -->'
+MANAGED_END = '<!-- owens-agent-system:end -->'
+GLOBAL_INSTRUCTIONS = {
+    'codex': '.codex/AGENTS.md',
+    'claude': '.claude/CLAUDE.md',
+    'gemini': '.gemini/GEMINI.md',
+    'copilot': '.copilot/copilot-instructions.md',
+    'opencode': '.config/opencode/AGENTS.md',
+    'cursor': '.cursor/rules/owens-agent-system.mdc',
+}
+SHARED_PROMPTS = ('prompts/core.md', 'prompts/owen.md')
 
 
 def merge(base, overlay):
