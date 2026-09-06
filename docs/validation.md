@@ -1,0 +1,7 @@
+# Validation scope
+
+The unit suite covers configuration merging and safety defaults, shell-safe argument construction, workspace validation, prompt composition, task traversal and overwrite protection, completion evidence, and export behavior. It uses disposable fixtures and no model calls.
+
+`check` validates all source TOML files, required workflow files, role paths, and scenario IDs. `doctor MODE` asks the installed Codex to parse the exact merged overrides with strict config enabled. It can also report unrelated inherited hook, plugin, authentication, or connector problems. Inspect the actual check categories before attributing a warning to this kit.
+
+Initial runtime and publication results are recorded in `docs/build-report.md`. Native desktop adoption, live mail/calendar/Linear/ROSIE actions, and comparative model-quality evaluations require separate evidence. No claim of optimal performance follows from CI.

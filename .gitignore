@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv/
+.oas/
+runs/
+*.local.*
+.env
+.env.*
+!.env.example
+.DS_Store
+auth.json
+*.pem
+*.key

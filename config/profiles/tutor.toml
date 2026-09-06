@@ -1,0 +1,5 @@
+sandbox_mode = "read-only"
+[agents]
+enabled = false
+[apps._default]
+default_tools_enabled = false

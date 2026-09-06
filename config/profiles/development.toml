@@ -1,0 +1,2 @@
+# Model and reasoning effort inherit the user's selection.
+sandbox_mode = "workspace-write"

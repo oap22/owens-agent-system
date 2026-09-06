@@ -1,0 +1,4 @@
+sandbox_mode = "workspace-write"
+[apps._default]
+approvals_reviewer = "user"
+default_tools_approval_mode = "writes"

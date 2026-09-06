@@ -1,0 +1,8 @@
+# Local work only. Inherited MCP servers and hooks still require operator audit.
+sandbox_mode = "workspace-write"
+approval_policy = "never"
+web_search = "disabled"
+[agents]
+enabled = false
+[apps._default]
+default_tools_enabled = false

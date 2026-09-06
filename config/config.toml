@@ -1,0 +1,29 @@
+#:schema https://developers.openai.com/codex/config-schema.json
+# Source layer consumed by scripts/oas.py; never copy account state into this file.
+approval_policy = "on-request"
+approvals_reviewer = "auto_review"
+sandbox_mode = "workspace-write"
+web_search = "cached"
+
+[sandbox_workspace_write]
+network_access = false
+writable_roots = []
+
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 3
+
+[agents.researcher]
+description = "Investigate a bounded question; return source-backed claims, counterevidence, and uncertainty."
+config_file = "agents/researcher.toml"
+
+[agents.reviewer]
+description = "Independently inspect an implementation or research claim; return reproducible findings by severity."
+config_file = "agents/reviewer.toml"
+
+[agents.builder]
+description = "Implement a clearly owned slice and verify it. Never revert another contributor's work."
+config_file = "agents/builder.toml"
+
+[apps._default]
+default_tools_approval_mode = "writes"
