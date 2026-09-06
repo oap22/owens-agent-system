@@ -89,8 +89,17 @@ class OASTest(unittest.TestCase):
         self.assertTrue(cmd[-1].startswith('Shared guidance'))
 
     def test_missing_workspace_rejected(self):
-        with self.assertRaises(FileNotFoundError):
+        with self.assertRaises(ValueError) as ctx:
             oas.command('codex', 'ops', self.root / 'missing', 'task')
+        self.assertIn('missing', str(ctx.exception))
+
+    def test_deleted_cwd_names_the_problem(self):
+        gone = self.root / 'gone'; gone.mkdir()
+        self.addCleanup(oas.os.chdir, oas.os.getcwd())
+        oas.os.chdir(gone); gone.rmdir()
+        with self.assertRaises(ValueError) as ctx:
+            oas.workspace_path('.')
+        self.assertIn('current directory', str(ctx.exception))
 
     def test_empty_task_rejected(self):
         with self.assertRaises(ValueError):

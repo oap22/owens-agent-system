@@ -135,7 +135,10 @@ def prompt(mode, task, shared=True):
 
 
 def workspace_path(value):
-    path = Path(value).expanduser().resolve(strict=True)
+    try:
+        path = Path(value).expanduser().resolve(strict=True)
+    except FileNotFoundError:
+        raise ValueError(f'Workspace not found: {value} (if this is ".", your shell\'s current directory may no longer exist; cd to a real directory)') from None
     if not path.is_dir():
         raise ValueError('Workspace must be an existing directory')
     return path
