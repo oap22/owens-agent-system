@@ -10,7 +10,7 @@ The launcher passes config values directly, so no global installation is require
 
 Exported role paths point to the permanent clone and must be regenerated if it moves. Exported settings do not contain the workflow prompt: give Codex the shared prompt and selected workflow, or use the launcher. Desktop profile support and discovery must be checked in that client. Never blindly replace `~/.codex/config.toml` or inject this system's instructions into every existing repository.
 
-For portable use in Claude or another assistant, provide `prompts/core.md`, `prompts/owen.md`, and one workflow. Configure that tool's own permissions separately. No Claude permission adapter has been validated.
+For portable use in Claude or another assistant, provide `prompts/core.md`, `prompts/owen.md`, and one workflow. Configure that tool's own permissions separately. The Claude adapter's flags are validated against installed help and `adapters/claude/settings.json` is parsed by `check`; OS-level enforcement and a live run are not validated.
 
 Rollback: stop the new session and start Codex normally. Because the launcher does not install or modify global settings, ordinary sessions retain their existing setup. Remove only a profile file you deliberately installed to undo that optional path; keep task records for provenance.
 
@@ -37,4 +37,4 @@ After setup, start a new agent session to load the global instructions. For expl
 
 This installation does not authenticate new accounts or establish paid entitlements. Gemini/Copilot may require login at first launch. Existing model choices, credentials, plugins, hooks, and canonical skill installations remain in place. Cursor rules apply to Agent chat, not Tab completion or Bugbot.
 
-To roll back, compare the current files with the backup manifest before restoring the matching backed-up file. Remove a newly created file only if its current SHA-256 still matches the manifest's installed hash; preserve any later edits. This installer does not uninstall CLI packages.
+To roll back, run `python3 scripts/setup.py --rollback ~/.local/state/owens-agent-system/backups/<run>` to preview, then add `--apply` to execute. It restores each backed-up original with its recorded mode and removes a file the installer created only if its current SHA-256 still matches the manifest's installed hash; otherwise it keeps the file and says so. The backup directory is never deleted. This installer does not uninstall CLI packages.

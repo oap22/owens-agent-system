@@ -12,3 +12,21 @@ Date: 2026-09-06.
 - Publication review: authored source files inspected; no source vault notes, credential files, account configuration, transcripts, or data exports included. No credential-pattern hits in the candidate files. No dedicated secret scanner was installed; pattern scanning is a heuristic rather than proof.
 
 This establishes a tested workflow/configuration kit. It does not establish optimal model performance, cross-vendor permission equivalence, successful external integrations, or desktop adoption. The evaluation scenario bank is ready to run; no comparative agent-quality results are claimed.
+
+## 2026-09-06 audit and optimization
+
+- Measured before the change: after `setup.py --apply`, every global instruction file carried the managed block while the launcher still sent `prompts/core.md` and `prompts/owen.md` as the session prompt, so each `run` loaded the same guidance twice.
+
+| mode | full prompt chars | workflow-only chars | redundant |
+|---|---|---|---|
+| development | 6401 | 1703 | 73% |
+| research | 6328 | 1630 | 74% |
+| ops | 6252 | 1554 | 75% |
+| tutor | 5190 | 492 | 90% |
+| unattended | 5513 | 815 | 85% |
+
+- Changes: `--shared auto|always|never` on `preview`, `run`, and `bundle`; the Claude adapter passes guidance through `--append-system-prompt` with the task as the final prompt; `task --scenario ID`; an advisory skill-routing drift warning in `check`; `setup.py --rollback`; `check` invariants raised explicitly instead of with `assert`; UTF-8 encoding on all text reads and writes.
+- `python3 scripts/oas.py check` and `python3 -O scripts/oas.py check`: passed.
+- `python3 -m unittest discover -s tests -v`: 61 tests passed.
+- Installed CLIs at this date: Codex 0.153.0, Claude Code 2.1.259, Cursor Agent 2026.08.11-e8db854, Gemini CLI 0.58.0, GitHub Copilot CLI 1.0.83, OpenCode 1.16.2. Launcher flags were checked against installed `--help` output. No live model run was performed.
+- The prompt reduction and the Claude placement are structural de-duplication and alignment with the native convention. No model-quality gain is claimed or measured.

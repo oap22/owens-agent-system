@@ -16,7 +16,7 @@ python3 scripts/oas.py preview development --workspace /absolute/path/to/project
 python3 scripts/oas.py run development --agent claude --workspace /absolute/path/to/project --task "Fix the failing CSV import and verify it"
 ```
 
-`preview` prints the exact command and assembled instructions without starting an agent. `run` opens the selected agent in the target workspace with the same core instructions and its native permission controls. `--agent` defaults to `codex`; use `claude`, `cursor`, `gemini`, or `copilot` to switch. Existing account login, installed skills, and connectors remain available where that agent supports them. It does not overwrite your global configuration or project instructions. Choose a task worktree first for development; see [[workflows/development]].
+`preview` prints the exact command and assembled instructions without starting an agent. `run` opens the selected agent in the target workspace with the same core instructions and its native permission controls. `--agent` defaults to `codex`; use `claude`, `cursor`, `gemini`, `copilot`, or `opencode` to switch. Both accept `--shared auto|always|never` (default `auto`): `auto` omits `prompts/core.md` and `prompts/owen.md` when the agent's global instruction file already contains the current managed block, `always` sends them regardless, and `never` omits them; the workflow and task are always sent. Existing account login, installed skills, and connectors remain available where that agent supports them. It does not overwrite your global configuration or project instructions. Choose a task worktree first for development; see [[workflows/development]].
 
 | Mode | Use it for | Codex permission mapping |
 |---|---|---|
@@ -28,10 +28,13 @@ python3 scripts/oas.py run development --agent claude --workspace /absolute/path
 
 ```sh
 python3 scripts/oas.py task research --output /absolute/path/to/project/.oas --title "Compare deblending baselines" --criterion "Each material claim has a source" --criterion "A reproducible next experiment is specified"
+python3 scripts/oas.py task tutor --scenario coursework --output /absolute/path/to/project/.oas
 python3 scripts/oas.py run research --workspace /absolute/path/to/project --task "Use the task contract in .oas/<created-id>/task.json"
 ```
 
-For IDE agents or another assistant, generate a standalone instruction bundle:
+`task --scenario ID` prefills the mode, title, and criteria from `evals/scenarios.json`; explicit `--title` and `--criterion` still work without it.
+
+For IDE agents or another assistant, generate a standalone instruction bundle (`bundle` defaults to `--shared always`):
 
 ```sh
 python3 scripts/oas.py bundle development --agent cursor --output /tmp/owen-cursor-bundle
@@ -63,4 +66,4 @@ See [[docs/architecture]], [[docs/permissions]], [[docs/setup]], and [[docs/pers
 
 ## Use it in your normal agent sessions
 
-Run `python3 scripts/setup.py` to preview global setup, then `python3 scripts/setup.py --apply` from the permanent clone. This installs shared guidance for Codex, Claude Code, Cursor, Gemini CLI, GitHub Copilot CLI, and OpenCode, preserves existing personal instructions, and creates local backups. See [[docs/setup]] for permission changes, login requirements, and rollback.
+Run `python3 scripts/setup.py` to preview global setup, then `python3 scripts/setup.py --apply` from the permanent clone. This installs shared guidance for Codex, Claude Code, Cursor, Gemini CLI, GitHub Copilot CLI, and OpenCode, preserves existing personal instructions, and creates local backups. After setup, the launcher detects the installed block and sends only the workflow and task. `python3 scripts/setup.py --rollback BACKUP_DIR` previews a rollback and `--apply` executes it. See [[docs/setup]] for permission changes, login requirements, and rollback.

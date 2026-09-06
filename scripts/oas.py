@@ -18,6 +18,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 MODES = ('development', 'research', 'ops', 'tutor', 'unattended')
 AGENTS = ('codex', 'claude', 'cursor', 'gemini', 'copilot', 'opencode', 'generic')
+SHARED_CHOICES = ('auto', 'always', 'never')
 # Markers and native global instruction paths shared with scripts/setup.py.
 MANAGED_START = '<!-- owens-agent-system:start -->'
 MANAGED_END = '<!-- owens-agent-system:end -->'
@@ -30,6 +31,11 @@ GLOBAL_INSTRUCTIONS = {
     'cursor': '.cursor/rules/owens-agent-system.mdc',
 }
 SHARED_PROMPTS = ('prompts/core.md', 'prompts/owen.md')
+TASK_HEADER = '\n\n# Current user task\n\n'
+
+
+def read(path):
+    return Path(path).read_text(encoding='utf-8')
 
 
 def merge(base, overlay):
@@ -85,11 +91,47 @@ def overrides(mode):
     return result
 
 
-def prompt(mode, task):
+def shared_installed(agent, home=None):
+    """True when the agent's global instruction file carries the managed block with the current shared prompts."""
+    if agent not in GLOBAL_INSTRUCTIONS:
+        return False
+    try:
+        text = read((Path.home() if home is None else Path(home)) / GLOBAL_INSTRUCTIONS[agent])
+        if text.count(MANAGED_START) != 1 or text.count(MANAGED_END) != 1:
+            return False
+        block = text[text.index(MANAGED_START):text.index(MANAGED_END)]
+        return all(read(ROOT / p).strip() in block for p in SHARED_PROMPTS)
+    except (OSError, ValueError):
+        return False
+
+
+def shared_decision(agent, shared='auto', home=None):
+    """Resolve a --shared choice to (include_shared_prompts, reason)."""
+    if shared not in SHARED_CHOICES:
+        raise ValueError(f'--shared must be one of {", ".join(SHARED_CHOICES)}')
+    if shared != 'auto':
+        return shared == 'always', f'--shared {shared}'
+    location = GLOBAL_INSTRUCTIONS.get(agent)
+    if location is None:
+        return True, f'{agent} has no known global instruction file'
+    if shared_installed(agent, home):
+        return False, f'managed block with current shared prompts found in ~/{location}'
+    return True, f'no managed block with current shared prompts in ~/{location}'
+
+
+def guidance(mode, shared=True):
+    if mode not in MODES:
+        raise ValueError('Unknown mode')
+    workflow = read(ROOT / f'workflows/{mode}.md')
+    if not shared:
+        return f'Shared guidance is loaded from your global instructions; this is the {mode} workflow.\n\n' + workflow
+    return '\n\n'.join([read(ROOT / p) for p in SHARED_PROMPTS] + [workflow])
+
+
+def prompt(mode, task, shared=True):
     if mode not in MODES or not task.strip():
         raise ValueError('A valid mode and nonempty task are required')
-    parts = [(ROOT / p).read_text() for p in ('prompts/core.md', 'prompts/owen.md', f'workflows/{mode}.md')]
-    return '\n\n'.join(parts) + '\n\n# Current user task\n\n' + task
+    return guidance(mode, shared) + TASK_HEADER + task
 
 
 def workspace_path(value):
@@ -99,9 +141,10 @@ def workspace_path(value):
     return path
 
 
-def command(agent, mode, workspace, task):
+def command(agent, mode, workspace, task, shared='auto', home=None):
     workspace = workspace_path(workspace)
-    message = prompt(mode, task)
+    include, _ = shared_decision(agent, shared, home)
+    message = prompt(mode, task, include)
     if agent not in AGENTS or agent == 'generic':
         raise ValueError('Generic agents use bundle, not run; select a native adapter')
     if mode == 'unattended' and agent != 'codex':
@@ -110,7 +153,11 @@ def command(agent, mode, workspace, task):
         return ['codex', '--strict-config', *overrides(mode), '-C', str(workspace), message]
     if agent == 'claude':
         native_mode = 'plan' if mode == 'tutor' else ('manual' if mode == 'ops' else 'acceptEdits')
-        return ['claude', '--settings', str(ROOT / 'adapters/claude/settings.json'), '--permission-mode', native_mode, message]
+        # Guidance is system-level context for Claude Code; the raw task is the user turn.
+        if task.lstrip().startswith('-'):
+            raise ValueError('Claude receives the task as a positional prompt; it must not start with a dash')
+        return ['claude', '--settings', str(ROOT / 'adapters/claude/settings.json'), '--permission-mode', native_mode,
+                '--append-system-prompt', guidance(mode, include), task]
     if agent == 'cursor':
         args = ['cursor-agent', '--workspace', str(workspace), '--sandbox', 'enabled']
         if mode == 'tutor':
@@ -137,8 +184,26 @@ def new_file(path, content):
     return path
 
 
-def new_task(mode, output, title, criteria):
-    if mode not in MODES or not title.strip() or not criteria or any(not x.strip() for x in criteria):
+def scenarios():
+    return json.loads(read(ROOT / 'evals/scenarios.json'))
+
+
+def scenario(ident):
+    for item in scenarios():
+        if item['id'] == ident:
+            return item
+    raise ValueError(f'Unknown scenario: {ident}')
+
+
+def new_task(mode, output, title, criteria, scenario_id=None):
+    if scenario_id is not None:
+        item = scenario(scenario_id)
+        if mode not in (None, item['mode']):
+            raise ValueError(f'Scenario {scenario_id} uses mode {item["mode"]}, not {mode}')
+        mode = item['mode']
+        title = title or item['prompt']
+        criteria = criteria or list(item['expected']) + list(item['checks'])
+    if mode not in MODES or not isinstance(title, str) or not title.strip() or not criteria or any(not isinstance(x, str) or not x.strip() for x in criteria):
         raise ValueError('Task requires a valid mode, title, and nonempty acceptance criteria')
     ident = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:8]
     folder = Path(output).expanduser().resolve() / ident
@@ -149,6 +214,8 @@ def new_task(mode, output, title, criteria):
                   checkpoint=dict(completed=[], blockers=[], next_action='Confirm scope and begin', commit=None),
                   budget=dict(max_minutes=None, max_iterations=None),
                   idempotency_key=ident, retry_limit=0)
+    if scenario_id is not None:
+        record['scenario'] = scenario_id
     new_file(folder / 'task.json', json.dumps(record, indent=2) + '\n')
     new_file(folder / 'handoff.md', '# Handoff\n\nOutcome:\n\nEvidence:\n\nRemaining work:\n\nNext action:\n')
     return folder
@@ -156,13 +223,15 @@ def new_task(mode, output, title, criteria):
 
 def validate_task(path):
     path = Path(path).resolve(strict=True)
-    data = json.loads(path.read_text())
+    data = json.loads(read(path))
     errors = []
     if not isinstance(data, dict):
         return ['Task must be a JSON object']
     for field in ('id', 'title', 'owner'):
         if not isinstance(data.get(field), str) or not data[field].strip():
             errors.append(f'{field} must be a nonempty string')
+    if 'scenario' in data and (not isinstance(data['scenario'], str) or not data['scenario'].strip()):
+        errors.append('scenario must be a nonempty string when present')
     if data.get('schema_version') != 1 or data.get('mode') not in MODES:
         errors.append('Unsupported schema or mode')
     if data.get('status') not in ('planned', 'active', 'blocked', 'complete'):
@@ -215,7 +284,7 @@ def validate_task(path):
     return errors
 
 
-def bundle(mode, agent, output, task):
+def bundle(mode, agent, output, task, shared=True):
     if agent not in AGENTS:
         raise ValueError('Unknown agent')
     folder = Path(output).expanduser()
@@ -224,7 +293,7 @@ def bundle(mode, agent, output, task):
     name = {'codex':'AGENTS.md', 'claude':'CLAUDE.md', 'gemini':'GEMINI.md',
             'copilot':'.github/copilot-instructions.md', 'cursor':'.cursor/rules/owen-agent-system.mdc',
             'opencode':'AGENTS.md', 'generic':'AGENTS.md'}[agent]
-    content = prompt(mode, task)
+    content = prompt(mode, task, shared)
     if agent == 'cursor':
         content = '---\ndescription: Owen working system\nalwaysApply: true\n---\n\n' + content
     new_file(folder / name, content)
@@ -232,32 +301,55 @@ def bundle(mode, agent, output, task):
     return folder
 
 
-def check():
+def routed_skills():
+    """Skill names referenced by `Skill routing:` lines in the workflows."""
+    names = set()
+    for path in sorted((ROOT / 'workflows').glob('*.md')):
+        for line in read(path).splitlines():
+            if line.startswith('Skill routing:'):
+                names.update(re.findall(r'`([^`]+)`', line))
+    return names
+
+
+def check(skills_root=None):
     for mode in MODES:
         cfg = config(mode)
-        assert cfg['sandbox_mode'] != 'danger-full-access'
-        assert cfg['sandbox_workspace_write']['network_access'] is False
-        assert cfg['sandbox_workspace_write']['writable_roots'] == []
+        if cfg['sandbox_mode'] == 'danger-full-access':
+            raise ValueError(f'{mode}: sandbox_mode must not be danger-full-access')
+        if cfg['sandbox_workspace_write']['network_access'] is not False:
+            raise ValueError(f'{mode}: sandbox_workspace_write.network_access must be false')
+        if cfg['sandbox_workspace_write']['writable_roots'] != []:
+            raise ValueError(f'{mode}: sandbox_workspace_write.writable_roots must be empty')
         prompt(mode, 'validation')
-    for path in (ROOT / 'config/agents').glob('*.toml'):
-        tomllib.loads(path.read_text())
-    scenarios = json.loads((ROOT / 'evals/scenarios.json').read_text())
-    assert len({s['id'] for s in scenarios}) == len(scenarios)
-    assert all(s['mode'] in MODES and s['expected'] and s['checks'] for s in scenarios)
-    json.loads((ROOT / 'adapters/claude/settings.json').read_text())
-    print(f'PASS: {len(MODES)} profiles, 3 roles, {len(scenarios)} evaluation scenarios')
+    roles = [tomllib.loads(read(path)) for path in sorted((ROOT / 'config/agents').glob('*.toml'))]
+    items = scenarios()
+    if len({s['id'] for s in items}) != len(items):
+        raise ValueError('Evaluation scenario ids must be unique')
+    if not all(s['mode'] in MODES and s['expected'] and s['checks'] for s in items):
+        raise ValueError('Every evaluation scenario needs a valid mode, expected list, and checks list')
+    json.loads(read(ROOT / 'adapters/claude/settings.json'))
+    skills_root = Path.home() / 'Developer/active/skills/skills' if skills_root is None else Path(skills_root)
+    if skills_root.is_dir():
+        for name in sorted(routed_skills()):
+            if not (skills_root / name).is_dir():
+                print(f'WARNING: routed skill `{name}` has no directory under {skills_root}', file=sys.stderr)
+    else:
+        print('skills repo not present; routing check skipped', file=sys.stderr)
+    print(f'PASS: {len(MODES)} profiles, {len(roles)} roles, {len(items)} evaluation scenarios')
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='action', required=True)
-    sub.add_parser('check')
+    p = sub.add_parser('check')
+    p.add_argument('--skills-root', help='Skills directory for routing drift check (default: ~/Developer/active/skills/skills)')
     for name in ('preview', 'run'):
         p = sub.add_parser(name)
         p.add_argument('mode', choices=MODES)
         p.add_argument('--agent', choices=AGENTS, default='codex')
         p.add_argument('--workspace', required=True)
         p.add_argument('--task', required=True)
+        p.add_argument('--shared', choices=SHARED_CHOICES, default='auto', help='Include shared prompts; auto omits them when the agent\'s global instructions carry them')
     p = sub.add_parser('doctor')
     p.add_argument('mode', choices=MODES)
     p = sub.add_parser('export', help='Export Codex settings without overwriting')
@@ -268,19 +360,23 @@ def main(argv=None):
     p.add_argument('--agent', choices=AGENTS, default='generic')
     p.add_argument('--output', required=True)
     p.add_argument('--task', default='Follow this workflow for the user\'s next request.')
+    p.add_argument('--shared', choices=SHARED_CHOICES, default='always')
     p = sub.add_parser('task')
-    p.add_argument('mode', choices=MODES)
+    p.add_argument('mode', nargs='?', choices=MODES)
     p.add_argument('--output', required=True)
-    p.add_argument('--title', required=True)
-    p.add_argument('--criterion', action='append', required=True)
+    p.add_argument('--title')
+    p.add_argument('--criterion', action='append')
+    p.add_argument('--scenario', help='Take mode, title, and criteria from this evals/scenarios.json id')
     p = sub.add_parser('verify-task')
     p.add_argument('path')
     args = parser.parse_args(argv)
     try:
         if args.action == 'check':
-            check()
+            check(args.skills_root)
         elif args.action == 'task':
-            print(new_task(args.mode, args.output, args.title, args.criterion))
+            if args.scenario is None and (args.mode is None or args.title is None or not args.criterion):
+                raise ValueError('mode, --title, and --criterion are required unless --scenario is given')
+            print(new_task(args.mode, args.output, args.title, args.criterion, args.scenario))
         elif args.action == 'verify-task':
             errors = validate_task(args.path)
             if errors:
@@ -288,7 +384,8 @@ def main(argv=None):
                 return 1
             print('PASS: record structure and evidence files; semantic correctness not assessed')
         elif args.action == 'bundle':
-            print(bundle(args.mode, args.agent, args.output, args.task))
+            include, _ = shared_decision(args.agent, args.shared)
+            print(bundle(args.mode, args.agent, args.output, args.task, include))
         elif args.action == 'export':
             content = '# Generated Codex profile; role paths depend on this clone location.\n'
             content += '\n'.join(f'{k} = {toml_value(v)}' for k,v in flatten(config(args.mode))) + '\n'
@@ -297,8 +394,11 @@ def main(argv=None):
         elif args.action == 'doctor':
             return subprocess.call(['codex', '--strict-config', *overrides(args.mode), 'doctor', '--summary'], cwd=ROOT)
         else:
-            cmd = command(args.agent, args.mode, args.workspace, args.task)
+            workspace = workspace_path(args.workspace)
+            cmd = command(args.agent, args.mode, workspace, args.task, args.shared)
             if args.action == 'preview':
+                include, reason = shared_decision(args.agent, args.shared)
+                print(f'shared guidance {"included" if include else "omitted"}: {reason}', file=sys.stderr)
                 print(shlex.join(cmd))
             else:
                 if not shutil.which(cmd[0]):
@@ -307,8 +407,8 @@ def main(argv=None):
                 # without silently rewriting the caller's environment.
                 if args.agent == 'copilot' and any(os.environ.get(k, '').lower() in ('1', 'true') for k in ('COPILOT_ALLOW_ALL', 'COPILOT_PLAN_THEN_AUTOPILOT')):
                     raise ValueError('Remove Copilot allow-all/autopilot environment overrides before launch')
-                return subprocess.call(cmd, cwd=workspace_path(args.workspace))
-    except (ValueError, OSError, AssertionError) as exc:
+                return subprocess.call(cmd, cwd=workspace)
+    except (ValueError, OSError) as exc:
         print(f'ERROR: {exc}', file=sys.stderr)
         return 2
     return 0

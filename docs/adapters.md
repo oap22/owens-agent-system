@@ -5,10 +5,10 @@ The shared system is portable. Permission enforcement and session management bel
 | Agent | Launch adapter | Instruction bundle | Permission mapping | Validation |
 |---|---|---|---|---|
 | Codex | `--agent codex` | `AGENTS.md` | Explicit TOML overrides; workspace sandbox, auto-review; tutor read-only | Strict config/runtime checks; see build report |
-| Claude Code | `--agent claude` | `CLAUDE.md` | `acceptEdits` for dev/research, `manual` for ops, `plan` for tutoring; bypass disabled in supplied settings | Installed 2.1.259 help checked; no paid model run |
+| Claude Code | `--agent claude` | `CLAUDE.md` | `acceptEdits` for dev/research, `manual` for ops, `plan` for tutoring; bypass disabled in supplied settings; guidance via `--append-system-prompt`, task as the final prompt | Installed 2.1.259 help checked; no paid model run |
 | Cursor Agent | `--agent cursor` | `.cursor/rules/owen-agent-system.mdc` | Sandbox enabled; auto-review for dev/research; ask mode for tutoring | Installed 2026.08.11-e8db854 help checked; no model run |
-| Gemini CLI | `--agent gemini` | `GEMINI.md` | Sandbox requested; default approvals; tutor plan mode | Official docs checked; not installed locally; plan mode may require experimental planning |
-| GitHub Copilot CLI | `--agent copilot` | `.github/copilot-instructions.md` | Interactive approvals inherited; tutor plan with shell/write tools denied | Official docs checked; not installed locally; no OS sandbox configured by adapter |
+| Gemini CLI | `--agent gemini` | `GEMINI.md` | Sandbox requested; default approvals; tutor plan mode | Installed 0.58.0 help checked; no model run; plan mode may require experimental planning |
+| GitHub Copilot CLI | `--agent copilot` | `.github/copilot-instructions.md` | Interactive approvals inherited; tutor plan with shell/write tools denied | Installed 1.0.83 help checked; no model run; no OS sandbox configured by adapter |
 | Any other agent | `bundle --agent generic` | `AGENTS.md` | Configure its own native controls | Prompt compatibility only |
 
 For example:
@@ -29,4 +29,6 @@ All adapters inherit existing runtime configuration and credentials. Copilot all
 
 OpenCode now has a launch adapter (`--agent opencode`) and global guidance at `~/.config/opencode/AGENTS.md`. Development uses its built-in build agent; tutoring uses plan. Native permission defaults are applied by the local setup script, not by Codex TOML. Installed OpenCode 1.16.2 launch options and resolved configuration were checked during setup. No cross-provider model execution is implied.
 
-The local setup also installs global guidance for all six agents. Gemini 0.58.0 and GitHub Copilot CLI 1.0.83 are now installed locally; this supersedes the initial build's absent-executable status. Authentication and an actual task remain separate checks.
+The local setup also installs global guidance for all six agents. Installed versions in the table were checked through each CLI's `--help` output; authentication and an actual task remain separate checks, and no live model run was performed for any adapter.
+
+After setup, `preview` and `run` default to `--shared auto`: when the target agent's global instruction file already holds the current managed block, the launcher omits `prompts/core.md` and `prompts/owen.md` and sends only the workflow and task. `--shared always` restores the full prompt; `--shared never` omits the shared files even without an installed block. `bundle` defaults to `always` because bundles usually target another machine.

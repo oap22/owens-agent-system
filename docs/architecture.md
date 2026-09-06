@@ -16,4 +16,6 @@ This kit intentionally leaves scheduling to the existing automation host and exp
 
 Every adapter consumes the same assembled core, Owen profile, selected workflow, and task. Native instruction bundles flatten that same source for IDE discovery. There is one workflow implementation, not five independently drifting prompts. Task JSON and handoff artifacts contain no vendor session IDs and can be continued by another agent.
 
+The launcher checks whether the target agent's global instruction file already contains the current managed block with the shared prompts. When it does, `run` sends only the workflow and task and states that the shared guidance is loaded globally; when it does not, or when `--shared always` is given, the full prompt is sent. For Claude Code, guidance goes through `--append-system-prompt` and the task is the user turn, matching how that client treats `CLAUDE.md` content. Both are structural de-duplication and placement choices, not measured quality gains.
+
 Native runtime control stays in the adapter. No translation claims that a Claude permission mode is equivalent to a Codex sandbox. The capability matrix states gaps; unsupported unattended launch combinations fail before starting a process. Generic bundles support additional assistants through their instruction interface, with no unverified runtime guarantees.
