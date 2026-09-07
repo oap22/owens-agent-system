@@ -7,7 +7,7 @@ The shared system is portable. Permission enforcement and session management bel
 | Codex | `--agent codex` | `AGENTS.md` | Explicit TOML overrides; workspace sandbox, auto-review; tutor read-only | Strict config/runtime checks; see build report |
 | Claude Code | `--agent claude` | `CLAUDE.md` | `acceptEdits` for dev/research, `manual` for ops, `plan` for tutoring; bypass disabled in supplied settings; guidance via `--append-system-prompt`, task as the final prompt | Installed 2.1.259 help checked; no paid model run |
 | Cursor Agent | `--agent cursor` | `.cursor/rules/owen-agent-system.mdc` | Sandbox enabled; auto-review for dev/research; ask mode for tutoring | Installed 2026.08.11-e8db854 help checked; no model run |
-| Gemini CLI | `--agent gemini` | `GEMINI.md` | Sandbox requested; default approvals; tutor plan mode | Installed 0.58.0 help checked; no model run; plan mode may require experimental planning |
+| Gemini CLI | `--agent gemini` | `GEMINI.md` | Sandbox requested; default approvals; tutor plan mode | Installed 0.58.0 help checked and launched; needs a one-time login, without which it exits 1 silently and the launcher shows `login needed`; plan mode may require experimental planning |
 | GitHub Copilot CLI | `--agent copilot` | `.github/copilot-instructions.md` | Interactive approvals inherited; tutor plan with shell/write tools denied | Installed 1.0.83 help checked; no model run; no OS sandbox configured by adapter |
 | Any other agent | `bundle --agent generic` | `AGENTS.md` | Configure its own native controls | Prompt compatibility only |
 

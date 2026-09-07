@@ -49,6 +49,7 @@ class OASUITestBase(unittest.TestCase):
         kwargs.setdefault('cwd', self.cwd)
         kwargs.setdefault('which', which or always_which())
         kwargs.setdefault('list_models', lambda agent: ['m-one', 'm-two'])
+        kwargs.setdefault('environ', {'GEMINI_API_KEY': 'test-key'})   # temp homes have no Gemini login
         return oas_ui.Launcher(**kwargs)
 
     def repo(self, name, root=None):
@@ -885,3 +886,32 @@ class ModelChoicesTest(unittest.TestCase):
         class Bad(R):
             returncode = 1
         self.assertEqual(oas_ui.model_choices('opencode', run=lambda cmd, **kw: Bad()), [])
+
+
+class LoginHintTest(OASUITestBase):
+    def test_gemini_without_auth_is_flagged_and_not_launched(self):
+        self.assertIsNotNone(oas_ui.login_hint('gemini', self.home, {}))
+        for agent in ('codex', 'claude', 'cursor', 'copilot', 'opencode'):
+            self.assertIsNone(oas_ui.login_hint(agent, self.home, {}), agent)
+        launcher = self.make(environ={})
+        launcher.mode = 'development'; launcher.screen = 'agent'
+        launcher.cursor['agent'] = list(oas.AGENTS).index('gemini')
+        rows = {r.value: r for r in launcher.rows()}
+        self.assertEqual(rows['gemini'].detail, 'login needed')
+        self.assertIsNone(rows['gemini'].disabled)
+        launcher.key('enter'); launcher.key('enter')   # model: inherit
+        launcher.cursor['workspace'] = 0
+        with patch.object(oas.shutil, 'which', return_value='/usr/bin/gemini'):
+            launcher.key('enter')
+        self.assertIsNone(launcher.launch_request)
+        self.assertIn('login needed', launcher.error)
+
+    def test_gemini_auth_signals_clear_the_hint(self):
+        self.assertIsNone(oas_ui.login_hint('gemini', self.home, {'GEMINI_API_KEY': 'k'}))
+        g = self.home / '.gemini'; g.mkdir()
+        (g / 'settings.json').write_text('{"security": {"auth": {"selectedType": "oauth-personal"}}}', encoding='utf-8')
+        self.assertIsNone(oas_ui.login_hint('gemini', self.home, {}))
+        (g / 'settings.json').write_text('not json', encoding='utf-8')
+        self.assertIsNotNone(oas_ui.login_hint('gemini', self.home, {}))
+        (g / 'oauth_creds.json').write_text('{}', encoding='utf-8')
+        self.assertIsNone(oas_ui.login_hint('gemini', self.home, {}))

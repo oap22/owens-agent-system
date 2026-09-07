@@ -35,6 +35,17 @@ This establishes a tested workflow/configuration kit. It does not establish opti
 
 Codex 0.153.0 rejected `apps._default.default_tools_enabled` at interactive startup as an unknown field, so tutor and unattended could not launch. Codex `doctor` with the same overrides reported no failure, and the initial build's `debug prompt-input` check cannot take `--strict-config`, so neither validation exercised the client's loader. The published config schema lists `enabled`, `approvals_reviewer`, `default_tools_approval_mode`, `destructive_enabled`, and `open_world_enabled` under `apps._default`; both profiles now use `enabled = false`. Verified by starting the real client with the tutor overrides in a pseudo-terminal and observing no config error. The launcher now pauses on the agent's own output after a non-zero exit instead of redrawing over it.
 
-## 2026-09-07 known issue: Gemini adapter
+## 2026-09-07 live adapter verification
 
-Owen reports the Gemini CLI does not launch from the launcher. Not yet reproduced or fixed; live verification of all six adapters is scheduled and not run. The adapters table in `docs/adapters.md` should be read with that caveat until this entry is replaced by results.
+Each adapter was started once with the launcher's exact tutor-mode argv (open session, read-only) in a pseudo-terminal and its first 14 seconds of output captured, then terminated. Results on this machine:
+
+| Adapter | Result |
+|---|---|
+| Codex 0.153.0 | Starts; waits at its directory-trust prompt |
+| Claude Code 2.1.259 | Starts; waits at its folder-trust prompt |
+| Cursor Agent 2026.08.11 | Starts; waits at its workspace-trust prompt |
+| Gemini CLI 0.58.0 | Exits 1 after about 2.5 s with no message on screen. Headless mode explains it: no auth method is configured (no `~/.gemini/oauth_creds.json`, no `security.auth.selectedType`, no `GEMINI_API_KEY`). Not a launcher defect; login is a one-time user action. The launcher now shows `login needed` on the Gemini row and refuses to launch with the fix spelled out instead of letting Gemini vanish. |
+| GitHub Copilot CLI 1.0.83 | Starts; shows its home screen |
+| OpenCode 1.16.2 | Starts; shows its session screen |
+
+No model turn was completed and no file was changed. Trust prompts are each CLI's own first-run behavior for a directory. Gemini remains unverified past login until Owen completes it.

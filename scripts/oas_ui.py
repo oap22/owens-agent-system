@@ -105,6 +105,28 @@ def model_choices(agent, run=None):
     return parse_models(agent, result.stdout) if result.returncode == 0 else []
 
 
+GEMINI_AUTH_ENV = ('GEMINI_API_KEY', 'GOOGLE_GENAI_USE_VERTEXAI', 'GOOGLE_GENAI_USE_GCA')
+
+
+def login_hint(agent, home, environ):
+    """A one-line reason the agent cannot start yet, or None. Only Gemini has a reliable signal:
+    its interactive mode exits 1 silently when no auth method is configured."""
+    if agent != 'gemini':
+        return None
+    home = Path(home)
+    if any(environ.get(k) for k in GEMINI_AUTH_ENV):
+        return None
+    if any((home / '.gemini' / f).is_file() for f in ('oauth_creds.json', 'google_accounts.json')):
+        return None
+    try:
+        settings = json.loads((home / '.gemini/settings.json').read_text(encoding='utf-8'))
+        if settings.get('security', {}).get('auth', {}).get('selectedType'):
+            return None
+    except (OSError, ValueError, AttributeError):
+        pass
+    return 'login needed: run gemini once in a terminal and choose a login, or set GEMINI_API_KEY'
+
+
 def permission_label(cmd, agent, mode):
     if agent == 'codex':
         return oas.config(mode)['sandbox_mode']
@@ -169,6 +191,8 @@ class Launcher:
             cmd = oas.command(agent, self.mode, self.cwd, 'placeholder', shared='never')
             if not self._which(cmd[0]):
                 rows.append(Row(agent, '', 'not installed', agent))
+            elif login_hint(agent, self.home, self.environ):
+                rows.append(Row(agent, 'login needed', None, agent))
             else:
                 rows.append(Row(agent, permission_label(cmd, agent, self.mode), None, agent))
         return rows
@@ -379,6 +403,10 @@ class Launcher:
 
     def _launch(self):
         """Choosing a workspace launches an open session; refusals stay on screen as error."""
+        hint = login_hint(self.agent, self.home, self.environ)
+        if hint:
+            self.error = f'{self.agent}: {hint}'
+            return
         try:
             cmd = oas.launch_command(self.agent, self.mode, self.workspace, '', 'auto', self.home, model=self.model)
             self.launch_request = (cmd, oas.workspace_path(self.workspace))
