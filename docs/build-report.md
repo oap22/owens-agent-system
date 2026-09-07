@@ -30,3 +30,7 @@ This establishes a tested workflow/configuration kit. It does not establish opti
 - `python3 -m unittest discover -s tests -v`: 61 tests passed.
 - Installed CLIs at this date: Codex 0.153.0, Claude Code 2.1.259, Cursor Agent 2026.08.11-e8db854, Gemini CLI 0.58.0, GitHub Copilot CLI 1.0.83, OpenCode 1.16.2. Launcher flags were checked against installed `--help` output. No live model run was performed.
 - The prompt reduction and the Claude placement are structural de-duplication and alignment with the native convention. No model-quality gain is claimed or measured.
+
+## 2026-09-07 tutor and unattended launch fix
+
+Codex 0.153.0 rejected `apps._default.default_tools_enabled` at interactive startup as an unknown field, so tutor and unattended could not launch. Codex `doctor` with the same overrides reported no failure, and the initial build's `debug prompt-input` check cannot take `--strict-config`, so neither validation exercised the client's loader. The published config schema lists `enabled`, `approvals_reviewer`, `default_tools_approval_mode`, `destructive_enabled`, and `open_world_enabled` under `apps._default`; both profiles now use `enabled = false`. Verified by starting the real client with the tutor overrides in a pseudo-terminal and observing no config error. The launcher now pauses on the agent's own output after a non-zero exit instead of redrawing over it.

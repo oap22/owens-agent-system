@@ -54,13 +54,13 @@ class OASTest(unittest.TestCase):
         cfg = oas.config('tutor')
         self.assertEqual(cfg['sandbox_mode'], 'read-only')
         self.assertFalse(cfg['agents']['enabled'])
-        self.assertFalse(cfg['apps']['_default']['default_tools_enabled'])
+        self.assertFalse(cfg['apps']['_default']['enabled'])
 
     def test_unattended_no_escalation(self):
         cfg = oas.config('unattended')
         self.assertEqual(cfg['approval_policy'], 'never')
         self.assertEqual(cfg['web_search'], 'disabled')
-        self.assertFalse(cfg['apps']['_default']['default_tools_enabled'])
+        self.assertFalse(cfg['apps']['_default']['enabled'])
 
     def test_ops_human_app_writes(self):
         cfg = oas.config('ops')['apps']['_default']

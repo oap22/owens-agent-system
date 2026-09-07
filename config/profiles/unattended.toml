@@ -5,4 +5,4 @@ web_search = "disabled"
 [agents]
 enabled = false
 [apps._default]
-default_tools_enabled = false
+enabled = false

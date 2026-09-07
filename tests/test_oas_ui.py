@@ -758,3 +758,15 @@ class OpaqueForegroundTest(unittest.TestCase):
             left, right = lines[top].index('┌'), lines[top].index('┐')
             self.assertLessEqual(abs((left + right) // 2 - 45), 1, keys)
             self.assertLess(right - left, 80, keys)
+
+
+class ExitNoticeTest(unittest.TestCase):
+    def test_notice_names_agent_and_code_and_waits(self):
+        text = oas_screen.exit_notice('codex', 1)
+        self.assertIn('codex', text)
+        self.assertIn('code 1', text)
+        self.assertIn('Press Enter', text)
+        calls = []
+        oas_screen.wait_for_enter(read=lambda: calls.append(1) or '\n')
+        self.assertEqual(calls, [1])
+        oas_screen.wait_for_enter(read=lambda: (_ for _ in ()).throw(EOFError()))

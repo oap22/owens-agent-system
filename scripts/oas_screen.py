@@ -393,6 +393,18 @@ def _session(stdscr, launcher, no_rain, min_cols, min_rows):
         launcher.key(name)
 
 
+def exit_notice(agent, code):
+    """One line shown after a failed session, before the launcher redraws."""
+    return f'\noas: {agent} exited with code {code}. Its output is above. Press Enter to return to the launcher.\n'
+
+
+def wait_for_enter(read=None):
+    try:
+        (read or sys.stdin.readline)()
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+
 def run_ui(plain=False, launcher=None, call=None):
     """Entry point for `oas ui`. Raises ValueError with no terminal attached."""
     if not sys.stdin.isatty() or not sys.stdout.isatty():
@@ -414,6 +426,11 @@ def run_ui(plain=False, launcher=None, call=None):
             sys.stdout.write('\033[2J\033[H' + (banner if no_rain else f'\033[1;32m{banner}\033[0m') + '\n')
             sys.stdout.flush()
             code = call(cmd, cwd=workspace)
+            if code != 0:
+                # Leave the agent's own output on screen until the user has read it.
+                sys.stdout.write(exit_notice(launcher.agent, code))
+                sys.stdout.flush()
+                wait_for_enter()
             launcher.returned(code)
     except KeyboardInterrupt:
         return 0
