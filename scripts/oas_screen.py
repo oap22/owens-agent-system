@@ -299,8 +299,10 @@ def _draw_panel(stdscr, y0, x0, width, rows_data, cursor, title, footer, colors,
     return height
 
 
-def _panel_geometry(cols, n_rows):
-    width = min(max(50, cols - 10), max(4, cols - 2))
+def _panel_geometry(cols, rows_data, min_width=50, title=''):
+    """Size the panel to its content (never wider than the terminal) and center it."""
+    needed = max([len(title) + 6, min_width] + [len(r.text) + len(r.disabled or r.detail or '') + 9 for r in rows_data])
+    width = min(needed, max(4, cols - 4))
     x = max(0, (cols - width) // 2)
     return width, x
 
@@ -313,17 +315,21 @@ def _draw_home(stdscr, launcher, colors, rows, cols):
         logo_rows = ["O W E N ' S   A G E N T S"]
     n = len(logo_rows)
     ramp = (_pair(colors, 'head') | curses.A_BOLD, _pair(colors, 'text') | curses.A_BOLD, _pair(colors, 'bright') | curses.A_BOLD)
-    band = max(len(line) for line in logo_rows) + 6
+    logo_width = max(len(line) for line in logo_rows)
+    band = logo_width + 6
     bx = max(0, (cols - band) // 2)
+    panel_rows = launcher.rows()
+    width, x = _panel_geometry(cols, panel_rows, min_width=logo_width + 2)
+    panel_height = max(len(panel_rows), 1) + 4
+    # Logo, one blank line, and panel are centered together as one block.
+    top = max(1, (rows - (n + 1 + panel_height)) // 2)
     for i, line in enumerate(logo_rows):
         attr = ramp[min(len(ramp) - 1, i * len(ramp) // max(1, n))]
-        x = max(0, (cols - len(line)) // 2)
+        lx = max(0, (cols - len(line)) // 2)
         # Blank a band behind the logo so it sits in front of the rain.
-        _safe_addstr(stdscr, 1 + i, bx, ' ' * band)
-        _safe_addstr(stdscr, 1 + i, x, line, attr)
-    panel_rows = launcher.rows()
-    width, x = _panel_geometry(cols, len(panel_rows))
-    y = min(1 + n + 1, max(1, rows - (max(len(panel_rows), 1) + 5)))
+        _safe_addstr(stdscr, top + i, bx, ' ' * band)
+        _safe_addstr(stdscr, top + i, lx, line, attr)
+    y = top + n + 1
     _draw_panel(stdscr, y, x, width, panel_rows, launcher.cursor.get('mode', 0),
                 'mode', launcher.footer(), colors, launcher.error or launcher.empty_message())
 
@@ -331,7 +337,7 @@ def _draw_home(stdscr, launcher, colors, rows, cols):
 def _draw_list_screen(stdscr, launcher, colors, rows, cols):
     panel_rows = launcher.rows()
     cursor = launcher.cursor.get(launcher.screen, 0)
-    width, x = _panel_geometry(cols, len(panel_rows))
+    width, x = _panel_geometry(cols, panel_rows, title=launcher.title())
     max_visible = max(1, rows - 6)
     height = min(max(len(panel_rows), 1), max_visible) + 4
     y = max(1, (rows - height) // 2)

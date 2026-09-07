@@ -740,3 +740,21 @@ class OpaqueForegroundTest(unittest.TestCase):
                 for l in logo_rows:
                     a = l.index('█'); b = l.rindex('█')
                     self.assertFalse(self.has_rain(l[a - 3:b + 4]), l)
+
+    def test_home_block_and_panels_are_centered(self):
+        lines = self.render()
+        logo_top = next(i for i, l in enumerate(lines) if '█' in l)
+        box_top = next(i for i, l in enumerate(lines) if '┌' in l)
+        box_bottom = next(i for i, l in enumerate(lines) if '└' in l)
+        block_height = box_bottom - logo_top + 1
+        self.assertLessEqual(abs(logo_top - (30 - block_height) // 2), 1)
+        left, right = lines[box_top].index('┌'), lines[box_top].index('┐')
+        self.assertLessEqual(abs((left + right) // 2 - 45), 1)
+        for keys in (('enter',), ('enter', 'enter')):
+            lines = self.render(*keys)
+            top = next(i for i, l in enumerate(lines) if '┌' in l)
+            bottom = next(i for i, l in enumerate(lines) if '└' in l)
+            self.assertLessEqual(abs((top + bottom) // 2 - 15), 1, keys)
+            left, right = lines[top].index('┌'), lines[top].index('┐')
+            self.assertLessEqual(abs((left + right) // 2 - 45), 1, keys)
+            self.assertLess(right - left, 80, keys)
