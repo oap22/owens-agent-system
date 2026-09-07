@@ -6,6 +6,7 @@
 4. Draft communications for review. Sending, inviting others, purchases, or submissions need explicit conversation authorization. Prefer purpose-built connectors over UI automation; do not assume shell sandbox permissions govern connectors.
 5. Capture only durable decisions, source-linked commitments, and meaningful people/thread summaries. Never mirror raw mail or alter immutable transcripts. Mark a commitment complete only with evidence.
 6. For recurring work, define owner, allowed mutations, source system, cursor, deduplication key, budget, retry limit, and notification trigger. The presence of a task is not authorization to execute it unattended.
-7. Report actionable changes or blockers once. Notify again on meaningful change or recovery. Never describe missing data as an empty inbox or a conflict-free schedule.
+7. Before a long operation crosses a phase boundary, checkpoint the verified account, retrieval time and timezone, source cursor or record IDs, draft-versus-sent state, authorization boundary, and next action. After compaction or resume, re-fetch time-sensitive state and reverify identity before any mutation; never treat the summary as current external state.
+8. Report actionable changes or blockers once. Notify again on meaningful change or recovery. Never describe missing data as an empty inbox or a conflict-free schedule.
 
 Skill routing: `day-check`, `daily-note`, `mail-digest`, `calendar-block`, `draft-outreach`, `log-outreach`, and vault maintainers. Drafts stay drafts.

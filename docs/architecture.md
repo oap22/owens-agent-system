@@ -10,6 +10,8 @@ The implementor exists for token economy. The lead runs at high or xhigh effort 
 
 The task state separates planned, active, blocked, and complete. Each criterion has evidence and a boolean result. The evidence checker checks the record's structure and existence of local evidence; it cannot establish that a paper is correct or an agent's judgment is sound. Completion claims remain the lead's responsibility.
 
+Native runtimes own automatic context compaction because they know the selected model's window, reserved output space, and active tool cost. OAS owns continuity: durable checkpoints at phase boundaries, explicit compact instructions, and post-compaction verification. It does not use one vendor-independent percentage or treat a generated summary as evidence; see [[docs/compaction]].
+
 A candidate workflow earns promotion through repeated task outcomes: completion, correctness, unnecessary interruptions, recovery behavior, elapsed time, and cost where available. Changes live on a branch and preserve a rollback commit. No autonomous rewriting of active permissions or test criteria.
 
 This kit intentionally leaves scheduling to the existing automation host and experiment execution to the existing research tooling. Those integrations require live verification. It does not add a second task database, skill installer, or multi-provider inference router.

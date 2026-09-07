@@ -7,6 +7,6 @@
 5. Implement the smallest complete behavior. Test failure cases and meaningful boundaries. For a bug, prefer a regression that fails before and passes after. Do not add tests that merely restate constants or weaken tests to get green output.
 6. Review the actual diff and requirement coverage. Use `adversarial-review` when applicable; report self-review honestly when no independent reviewer ran. Check native or target-platform behavior for platform-sensitive changes.
 7. Commit only reviewed files. Push or open a PR when the request authorizes it. Honor repository CI, CODEOWNERS, and human review requirements before merge. Report separately: local checks, hosted CI, approval, merge, deployment.
-8. Save a checkpoint with commit, worktree, completed criteria, failing checks, known risks, and next action. Never mark complete while required work remains.
+8. Save a checkpoint after planning, after each completed implementation slice, and before review or release when the task is long enough to cross a context window. Record commit, worktree, owned and changed files, completed criteria, exact evidence paths, failing checks, known risks, and next action. After compaction or resume, reread the checkpoint and verify git state, the current diff, and relevant checks before continuing. Never mark complete while required work remains.
 
 Skill routing: `plan-then-ship`, `adversarial-review`, `publish-to-github`, `project-sync`; `turing` for that repository. Their current instructions are loaded at use time.

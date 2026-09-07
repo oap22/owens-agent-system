@@ -109,9 +109,26 @@ class OASTest(unittest.TestCase):
         for agent in oas.AGENTS[:-1]:
             cmd = oas.command(agent, 'research', self.root, 'Question')
             self.assertIn('Frame → Work → Prove → Hand off', ' '.join(cmd))
+            self.assertIn('automatic context compaction as lossy working-memory compression', ' '.join(cmd))
             self.assertTrue(cmd[-1].endswith('Question'))
             self.assertNotIn('--yolo', cmd)
             self.assertNotIn('--allow-all', cmd)
+
+    def test_claude_native_autocompact_is_explicit(self):
+        for mode in ('development', 'research', 'ops', 'tutor'):
+            cmd = oas.command('claude', mode, self.root, 'Task')
+            self.assertEqual(cmd.count('--autocompact'), 1, mode)
+            self.assertEqual(cmd[cmd.index('--autocompact') + 1], 'auto', mode)
+
+    def test_every_workflow_defines_compaction_continuity(self):
+        for mode in oas.MODES:
+            workflow = (oas.ROOT / f'workflows/{mode}.md').read_text(encoding='utf-8').lower()
+            self.assertIn('compact', workflow, mode)
+            self.assertTrue('checkpoint' in workflow or 'retrieval' in workflow, mode)
+
+    def test_compaction_scenarios_cover_every_mode(self):
+        covered = {item['mode'] for item in oas.scenarios() if item['id'].startswith('compact-')}
+        self.assertEqual(covered, set(oas.MODES))
 
     def test_native_tutor_controls(self):
         self.assertIn('plan', oas.command('claude', 'tutor', self.root, 'Teach me'))
@@ -178,7 +195,28 @@ class OASTest(unittest.TestCase):
     def test_initial_task_valid_not_complete(self):
         p = self.task()
         self.assertEqual(oas.validate_task(p), [])
-        self.assertEqual(json.loads(p.read_text())['status'], 'planned')
+        data = json.loads(p.read_text())
+        self.assertEqual((data['schema_version'], data['status']), (2, 'planned'))
+        self.assertEqual(data['checkpoint'], {
+            'phase': 'frame', 'completed': [], 'blockers': [], 'next_action': 'Confirm scope and begin',
+            'commit': None, 'worktree': None, 'owned_files': [], 'changed_files': [], 'evidence_paths': [],
+            'reverify': [], 'cursor': None, 'iteration': 0, 'retries_used': 0,
+        })
+
+    def test_version_two_checkpoint_fields_are_required_and_version_one_stays_readable(self):
+        p = self.task()
+        original = json.loads(p.read_text())
+        for field in ('phase', 'next_action', 'completed', 'owned_files', 'changed_files', 'evidence_paths',
+                      'reverify', 'commit', 'worktree', 'cursor', 'iteration', 'retries_used'):
+            data = json.loads(json.dumps(original))
+            del data['checkpoint'][field]
+            p.write_text(json.dumps(data))
+            self.assertTrue(oas.validate_task(p), field)
+        legacy = json.loads(json.dumps(original))
+        legacy['schema_version'] = 1
+        legacy['checkpoint'] = {k: legacy['checkpoint'][k] for k in ('completed', 'blockers', 'next_action', 'commit')}
+        p.write_text(json.dumps(legacy))
+        self.assertEqual(oas.validate_task(p), [])
 
     def test_complete_requires_all_evidence(self):
         p = self.task()
@@ -210,6 +248,31 @@ class OASTest(unittest.TestCase):
         p.write_text(json.dumps(data))
         self.assertTrue(oas.validate_task(p))
         data.update(authorized_actions=['Write local report'], writable_scope=['reports/'], budget={'max_minutes':10,'max_iterations':2})
+        p.write_text(json.dumps(data))
+        self.assertEqual(oas.validate_task(p), [])
+
+    def test_unattended_continuity_cannot_exceed_contract(self):
+        p = self.task(); data = json.loads(p.read_text())
+        data.update(mode='unattended', status='active', authorized_actions=['Write local report'],
+                    writable_scope=['reports/'], budget={'max_minutes': 10, 'max_iterations': 2}, retry_limit=1)
+        data['checkpoint'].update(iteration=3, retries_used=2)
+        p.write_text(json.dumps(data))
+        errors = oas.validate_task(p)
+        self.assertIn('Checkpoint retries exceed retry limit', errors)
+        self.assertIn('Checkpoint iteration exceeds task budget', errors)
+        data['schema_version'] = 1
+        data['checkpoint'] = {k: data['checkpoint'][k] for k in ('completed', 'blockers', 'next_action', 'commit')}
+        p.write_text(json.dumps(data))
+        self.assertIn('Active unattended task requires schema version 2 continuity state', oas.validate_task(p))
+
+    def test_checkpoint_evidence_must_be_local_and_present(self):
+        p = self.task(); data = json.loads(p.read_text())
+        for evidence in ('../outside.txt', '/absolute.txt', 'missing.txt'):
+            data['checkpoint']['evidence_paths'] = [evidence]
+            p.write_text(json.dumps(data))
+            self.assertTrue(oas.validate_task(p), evidence)
+        (p.parent / 'result.txt').write_text('current evidence')
+        data['checkpoint']['evidence_paths'] = ['result.txt']
         p.write_text(json.dumps(data))
         self.assertEqual(oas.validate_task(p), [])
 

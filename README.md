@@ -42,6 +42,8 @@ python3 scripts/oas.py run research --workspace /absolute/path/to/project --task
 
 `task --scenario ID` prefills the mode, title, and criteria from `evals/scenarios.json`; explicit `--title` and `--criterion` still work without it.
 
+Long sessions use each agent's native automatic context compaction. OAS preserves continuity through schema-version-2 task checkpoints at completed phase boundaries and requires volatile state to be reverified afterward; it does not impose one threshold across different model windows. Claude launches with `--autocompact auto`, setup enables OpenCode's native automatic setting, and the other adapters retain their model-aware defaults. See [[docs/compaction]] for manual commands, preservation rules, and provider limits.
+
 For IDE agents or another assistant, generate a standalone instruction bundle (`bundle` defaults to `--shared always`):
 
 ```sh

@@ -84,7 +84,10 @@ def plan(home, source):
     patches = {
         '.claude/settings.json': {'permissions': {'disableBypassPermissionsMode':'disable'}},
         '.cursor/cli-config.json': {'sandbox': {'mode':'enabled'},'approvalMode':'allowlist'},
-        '.config/opencode/opencode.json': {'permission':{'*':'ask','read':'allow','glob':'allow','grep':'allow','list':'allow','edit':'allow','external_directory':'ask','doom_loop':'ask'}},
+        '.config/opencode/opencode.json': {
+            'permission':{'*':'ask','read':'allow','glob':'allow','grep':'allow','list':'allow','edit':'allow','external_directory':'ask','doom_loop':'ask'},
+            'compaction':{'auto':True},
+        },
     }
     for relative, patch in patches.items():
         def update(old, patch=patch):

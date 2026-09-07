@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -54,6 +55,17 @@ class SetupTest(unittest.TestCase):
 
     def test_merge_keeps_other_settings(self):
         self.assertEqual(m.merged({'permissions':{'allow':['Read']},'model':'mine'},{'permissions':{'disableBypassPermissionsMode':'disable'}}),{'permissions':{'allow':['Read'],'disableBypassPermissionsMode':'disable'},'model':'mine'})
+
+    def test_opencode_setup_enables_auto_compaction_and_preserves_siblings(self):
+        p = self.home / '.config/opencode/opencode.json'
+        p.parent.mkdir(parents=True)
+        p.write_text(json.dumps({'compaction': {'auto': False, 'reserved': 12000}, 'model': 'mine'}))
+        changes = m.plan(self.home, self.source)
+        after = next(after for target, _, after, _ in changes if target == p)
+        data = json.loads(after)
+        self.assertTrue(data['compaction']['auto'])
+        self.assertEqual(data['compaction']['reserved'], 12000)
+        self.assertEqual(data['model'], 'mine')
 
     def test_markers_and_paths_come_from_oas(self):
         self.assertEqual((m.START,m.END),(m.oas.MANAGED_START,m.oas.MANAGED_END))

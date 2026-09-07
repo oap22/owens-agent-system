@@ -240,7 +240,12 @@ def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=
         # Guidance is system-level context for Claude Code; the raw task is the user turn.
         if task.lstrip().startswith('-'):
             raise ValueError('Claude receives the task as a positional prompt; it must not start with a dash')
-        args = ['claude', '--settings', str(ROOT / 'adapters/claude/settings.json'), '--permission-mode', native_mode, *model_flag]
+        # Make the native, model-aware compaction default explicit. Other
+        # adapters either have no launch flag or manage compaction in their own
+        # configuration; OAS documents those capabilities instead of inventing
+        # a cross-provider threshold with different semantics.
+        args = ['claude', '--settings', str(ROOT / 'adapters/claude/settings.json'), '--permission-mode', native_mode,
+                '--autocompact', 'auto', *model_flag]
         if lead_effort:
             args += ['--effort', lead_effort]
         if worker:
@@ -317,10 +322,12 @@ def new_task(mode, output, title, criteria, scenario_id=None):
     ident = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:8]
     folder = Path(output).expanduser().resolve() / ident
     folder.mkdir(parents=True, exist_ok=False)
-    record = dict(schema_version=1, id=ident, mode=mode, title=title, status='planned',
+    record = dict(schema_version=2, id=ident, mode=mode, title=title, status='planned',
                   owner='Owen', authorized_actions=[], writable_scope=[],
                   criteria=[dict(description=c, passed=False, evidence=[]) for c in criteria],
-                  checkpoint=dict(completed=[], blockers=[], next_action='Confirm scope and begin', commit=None),
+                  checkpoint=dict(phase='frame', completed=[], blockers=[], next_action='Confirm scope and begin',
+                                  commit=None, worktree=None, owned_files=[], changed_files=[], evidence_paths=[],
+                                  reverify=[], cursor=None, iteration=0, retries_used=0),
                   budget=dict(max_minutes=None, max_iterations=None),
                   idempotency_key=ident, retry_limit=0)
     if scenario_id is not None:
@@ -341,7 +348,8 @@ def validate_task(path):
             errors.append(f'{field} must be a nonempty string')
     if 'scenario' in data and (not isinstance(data['scenario'], str) or not data['scenario'].strip()):
         errors.append('scenario must be a nonempty string when present')
-    if data.get('schema_version') != 1 or data.get('mode') not in MODES:
+    schema_version = data.get('schema_version')
+    if schema_version not in (1, 2) or data.get('mode') not in MODES:
         errors.append('Unsupported schema or mode')
     if data.get('status') not in ('planned', 'active', 'blocked', 'complete'):
         errors.append('Invalid status')
@@ -350,6 +358,8 @@ def validate_task(path):
         return errors + ['Nonempty criteria list required']
     complete = data.get('status') == 'complete'
     if data.get('mode') == 'unattended' and data.get('status') != 'planned':
+        if schema_version == 1:
+            errors.append('Active unattended task requires schema version 2 continuity state')
         for field in ('authorized_actions', 'writable_scope'):
             values = data.get(field)
             if not isinstance(values, list) or not values or any(not isinstance(v, str) or not v.strip() for v in values):
@@ -390,6 +400,40 @@ def validate_task(path):
         errors.append('Checkpoint with blockers list required')
     elif complete and checkpoint['blockers']:
         errors.append('Complete task still has blockers')
+    if schema_version == 2 and isinstance(checkpoint, dict):
+        for field in ('phase', 'next_action'):
+            if not isinstance(checkpoint.get(field), str) or not checkpoint[field].strip():
+                errors.append(f'Checkpoint {field} must be a nonempty string')
+        for field in ('completed', 'blockers', 'owned_files', 'changed_files', 'evidence_paths', 'reverify'):
+            values = checkpoint.get(field)
+            if not isinstance(values, list) or any(not isinstance(v, str) or not v.strip() for v in values):
+                errors.append(f'Checkpoint {field} must be a string list')
+        for field in ('commit', 'worktree', 'cursor'):
+            if field not in checkpoint:
+                errors.append(f'Checkpoint {field} is required')
+                continue
+            value = checkpoint.get(field)
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                errors.append(f'Checkpoint {field} must be null or a nonempty string')
+        for field in ('iteration', 'retries_used'):
+            value = checkpoint.get(field)
+            if type(value) is not int or value < 0:
+                errors.append(f'Checkpoint {field} must be a nonnegative integer')
+        for item in checkpoint.get('evidence_paths', []):
+            if not isinstance(item, str) or not item.strip():
+                continue
+            candidate = (path.parent / item).resolve()
+            if Path(item).is_absolute() or not candidate.is_relative_to(path.parent):
+                errors.append('Checkpoint evidence must stay inside task directory')
+            elif not candidate.is_file() or candidate.stat().st_size == 0:
+                errors.append('Checkpoint evidence artifact is missing or empty')
+        if data.get('mode') == 'unattended' and data.get('status') != 'planned':
+            if type(checkpoint.get('retries_used')) is int and type(data.get('retry_limit')) is int and checkpoint['retries_used'] > data['retry_limit']:
+                errors.append('Checkpoint retries exceed retry limit')
+            budget = data.get('budget')
+            if (isinstance(budget, dict) and type(checkpoint.get('iteration')) is int
+                    and type(budget.get('max_iterations')) is int and checkpoint['iteration'] > budget['max_iterations']):
+                errors.append('Checkpoint iteration exceeds task budget')
     return errors
 
 
