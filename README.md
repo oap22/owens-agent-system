@@ -51,6 +51,10 @@ python3 scripts/oas.py bundle research --agent generic --output /tmp/owen-generi
 
 Bundles target `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, Copilot instructions, or Cursor rules. They are created in a fresh directory for review, so existing project files are never overwritten. The generic bundle can be attached or pasted into any agent that accepts instructions. Native controls differ; see [[docs/adapters]] before use.
 
+## Interactive launcher
+
+Run bare `oas` on an interactive terminal, or `oas ui` explicitly, to pick mode, agent, workspace, and task from full-screen panels instead of typing flags. Arrow keys and Enter move through the mode, agent, and workspace lists; a directory browser is available when the workspace you want is not under `~/Developer/active`; the last screen is a one-line task field. Launching runs the same `preview`/`run` path underneath, so behavior and permissions are identical to the flag form. `--plain` (or the `NO_COLOR` environment variable) drops the matrix-rain background and colors and keeps the same keys and flow, for accessibility or a plain terminal. Nothing is written to disk by the launcher; screen selections and the typed task live only in memory for that run. `oas` with no arguments on a non-interactive stream (a script, CI, a pipe) is unchanged: it prints the usual argparse usage error and exits 2.
+
 ## What is included
 
 - `config/config.toml`: Codex permissions and bounded specialist roles, including the `implementor` role shared with Claude Code delegation.

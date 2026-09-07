@@ -240,6 +240,29 @@ def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=
     return args + ['--interactive', message]
 
 
+def launch_command(agent, mode, workspace, task, shared='auto', home=None, **options):
+    cmd = command(agent, mode, workspace, task, shared, home, **options)
+    if not shutil.which(cmd[0]):
+        raise ValueError(f'{cmd[0]} is not installed; use bundle or install its official CLI')
+    # Copilot supports permission-bypass environment variables. Fail closed,
+    # without silently rewriting the caller's environment.
+    if agent == 'copilot' and any(os.environ.get(k, '').lower() in ('1', 'true') for k in ('COPILOT_ALLOW_ALL', 'COPILOT_PLAN_THEN_AUTOPILOT')):
+        raise ValueError('Remove Copilot allow-all/autopilot environment overrides before launch')
+    return cmd
+
+
+def launch(agent, mode, workspace, task, shared='auto', **options):
+    return subprocess.call(launch_command(agent, mode, workspace, task, shared, **options), cwd=workspace_path(workspace))
+
+
+def interactive_default(argv, stdin=None, stdout=None):
+    stdin = sys.stdin if stdin is None else stdin
+    stdout = sys.stdout if stdout is None else stdout
+    if not argv and stdin.isatty() and stdout.isatty():
+        return ['ui']
+    return argv
+
+
 def new_file(path, content):
     path = Path(path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -440,6 +463,9 @@ def main(argv=None):
     p.add_argument('--scenario', help='Take mode, title, and criteria from this evals/scenarios.json id')
     p = sub.add_parser('verify-task')
     p.add_argument('path')
+    p = sub.add_parser('ui')
+    p.add_argument('--plain', action='store_true', help='Disable rain and color; monochrome panels')
+    argv = interactive_default(sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(argv)
     try:
         if args.action == 'check':
@@ -464,22 +490,22 @@ def main(argv=None):
             print(new_file(args.output, content))
         elif args.action == 'doctor':
             return subprocess.call(['codex', '--strict-config', *overrides(args.mode), 'doctor', '--summary'], cwd=ROOT)
-        else:
+        elif args.action == 'ui':
+            _here = Path(__file__).resolve().parent
+            if str(_here) not in sys.path:
+                sys.path.insert(0, str(_here))
+            import oas_screen
+            return oas_screen.run_ui(plain=args.plain)
+        elif args.action == 'preview':
             workspace = workspace_path(args.workspace)
             cmd = command(args.agent, args.mode, workspace, args.task, args.shared,
                           lead_effort=args.lead_effort, worker_model=args.worker_model, worker_effort=args.worker_effort)
-            if args.action == 'preview':
-                include, reason = shared_decision(args.agent, args.shared)
-                print(f'shared guidance {"included" if include else "omitted"}: {reason}', file=sys.stderr)
-                print(shlex.join(cmd))
-            else:
-                if not shutil.which(cmd[0]):
-                    raise ValueError(f'{cmd[0]} is not installed; use bundle or install its official CLI')
-                # Copilot supports permission-bypass environment variables. Fail closed,
-                # without silently rewriting the caller's environment.
-                if args.agent == 'copilot' and any(os.environ.get(k, '').lower() in ('1', 'true') for k in ('COPILOT_ALLOW_ALL', 'COPILOT_PLAN_THEN_AUTOPILOT')):
-                    raise ValueError('Remove Copilot allow-all/autopilot environment overrides before launch')
-                return subprocess.call(cmd, cwd=workspace)
+            include, reason = shared_decision(args.agent, args.shared)
+            print(f'shared guidance {"included" if include else "omitted"}: {reason}', file=sys.stderr)
+            print(shlex.join(cmd))
+        else:
+            return launch(args.agent, args.mode, args.workspace, args.task, args.shared,
+                          lead_effort=args.lead_effort, worker_model=args.worker_model, worker_effort=args.worker_effort)
     except (ValueError, OSError) as exc:
         print(f'ERROR: {exc}', file=sys.stderr)
         return 2
