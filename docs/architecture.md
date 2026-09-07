@@ -4,7 +4,9 @@ The lead assistant is the interface. A compact shared contract sets working beha
 
 For Codex, the Python launcher merges the common TOML with one mode, resolves specialist config paths, and passes explicit values through Codex's `-c` interface. It supplies the shared guidance as the initial task prompt so it does not replace Codex's built-in developer instructions. Target workspace `AGENTS.md` remains in effect. This design avoids maintaining a separate account or copying credentials.
 
-The three specialists are capabilities, not an always-running organization: researcher investigates one question, builder owns one implementation slice, reviewer looks for concrete failure. Delegation needs authorization from the user or applicable workspace instructions and a useful independent task. The configured cap is three child threads; the lead makes four total.
+The four specialists are capabilities, not an always-running organization: researcher investigates one question, builder owns one implementation slice, reviewer looks for concrete failure, implementor executes one task packet on a cheaper model or lower effort and escalates instead of looping. Delegation needs authorization from the user or applicable workspace instructions and a useful independent task. The configured cap is three child threads; the lead makes four total.
+
+The implementor exists for token economy. The lead runs at high or xhigh effort for framing and verification; the implementor receives a packet ([[templates/task-packet]]) rather than the transcript and returns a short report. The role text is written once and sent to Claude Code as an inline subagent and to Codex as a role layer. When the split pays, and when the lead alone at lower effort is cheaper, is a measured question; [[docs/token-economy]] carries the published evidence and the protocol.
 
 The task state separates planned, active, blocked, and complete. Each criterion has evidence and a boolean result. The evidence checker checks the record's structure and existence of local evidence; it cannot establish that a paper is correct or an agent's judgment is sound. Completion claims remain the lead's responsibility.
 
