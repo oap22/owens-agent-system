@@ -21,10 +21,10 @@ MODE_DESCRIPTIONS = {
     'tutor': 'Coursework and research understanding',
     'unattended': 'Explicitly owned local jobs',
 }
-SCREENS = ('mode', 'agent', 'workspace', 'browser', 'task')
+SCREENS = ('mode', 'agent', 'workspace', 'browser')
 LIST_FOOTER = '↑↓ move  ⏎ select  ⌫ back  q quit'
-BROWSER_FOOTER = '⏎ open  ⌫ up  space choose  esc cancel  q quit'
-TASK_FOOTER = '⏎ launch  esc back'
+WORKSPACE_FOOTER = '↑↓ move  ⏎ launch  ⌫ back  q quit'
+BROWSER_FOOTER = '⏎ open  ⌫ up  space launch here  esc cancel  q quit'
 
 
 class Row(typing.NamedTuple):
@@ -99,10 +99,7 @@ class Launcher:
         self.agent = None
         self.workspace = None
         self.browser_dir = self.home
-        self.task = ''
-        self.pos = 0
-        self.error = None
-        self.flash = None
+        self.error = None           # last launch refusal, shown until the next key
         self.last_exit = None
         self.quit = False
         self.launch_request = None
@@ -187,8 +184,8 @@ class Launcher:
     def footer(self):
         if self.screen == 'browser':
             return BROWSER_FOOTER
-        if self.screen == 'task':
-            return TASK_FOOTER
+        if self.screen == 'workspace':
+            return WORKSPACE_FOOTER
         footer = LIST_FOOTER
         if self.screen == 'mode' and self.last_exit is not None:
             footer += f'   last session exited {self.last_exit}'
@@ -260,7 +257,7 @@ class Launcher:
                 self.cursor['browser'] = 0
             else:
                 self.workspace = row.value
-                self.screen = 'task'
+                self._launch()
 
     def _back(self):
         if self.screen == 'agent':
@@ -303,49 +300,19 @@ class Launcher:
             self.screen = 'workspace'
         elif name == 'space':
             self.workspace = self.browser_dir
-            self.screen = 'task'
+            self._launch()
 
-    def _task_key(self, name):
-        self.flash = None
-        if name == 'esc':
-            self.screen = 'workspace'
-        elif name == 'enter':
-            if not self.task.strip():
-                self.flash = 'task required'
-                return
-            try:
-                cmd = oas.launch_command(self.agent, self.mode, self.workspace, self.task, 'auto', self.home)
-                self.launch_request = (cmd, oas.workspace_path(self.workspace))
-                self.error = None
-            except ValueError as exc:
-                self.error = str(exc)
-        elif name == 'backspace':
-            if self.pos > 0:
-                self.task = self.task[:self.pos - 1] + self.task[self.pos:]
-                self.pos -= 1
-                self.error = None
-        elif name == 'left':
-            self.pos = max(0, self.pos - 1)
-        elif name == 'right':
-            self.pos = min(len(self.task), self.pos + 1)
-        elif name == 'home':
-            self.pos = 0
-        elif name == 'end':
-            self.pos = len(self.task)
-        elif name == 'space':
-            self.task = self.task[:self.pos] + ' ' + self.task[self.pos:]
-            self.pos += 1
-            self.error = None
-        elif len(name) == 1:
-            self.task = self.task[:self.pos] + name + self.task[self.pos:]
-            self.pos += 1
-            self.error = None
-        # other named keys ignored
+    def _launch(self):
+        """Choosing a workspace launches an open session; refusals stay on screen as error."""
+        try:
+            cmd = oas.launch_command(self.agent, self.mode, self.workspace, '', 'auto', self.home)
+            self.launch_request = (cmd, oas.workspace_path(self.workspace))
+        except ValueError as exc:
+            self.error = str(exc)
 
     def key(self, name):
-        if self.screen == 'task':
-            self._task_key(name)
-        elif self.screen == 'browser':
+        self.error = None
+        if self.screen == 'browser':
             self._browser_key(name)
         else:
             self._list_key(name)
@@ -353,10 +320,7 @@ class Launcher:
     def returned(self, code):
         self.last_exit = code
         self.screen = 'mode'
-        self.task = ''
-        self.pos = 0
         self.error = None
-        self.flash = None
         self.launch_request = None
         if self.mode in oas.MODES:
             self.cursor['mode'] = list(oas.MODES).index(self.mode)

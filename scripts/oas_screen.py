@@ -306,8 +306,9 @@ def _panel_geometry(cols, n_rows):
 
 
 def _draw_home(stdscr, launcher, colors, rows, cols):
-    if rows >= 24:
-        logo_rows = logo_lines("OWEN'S") + logo_lines('AGENTS')
+    block = logo_lines("OWEN'S AGENTS")
+    if rows >= 17 and cols >= len(block[0]) + 4:
+        logo_rows = block
     else:
         logo_rows = ["O W E N ' S   A G E N T S"]
     n = len(logo_rows)
@@ -324,7 +325,7 @@ def _draw_home(stdscr, launcher, colors, rows, cols):
     width, x = _panel_geometry(cols, len(panel_rows))
     y = min(1 + n + 1, max(1, rows - (max(len(panel_rows), 1) + 5)))
     _draw_panel(stdscr, y, x, width, panel_rows, launcher.cursor.get('mode', 0),
-                'mode', launcher.footer(), colors, launcher.empty_message())
+                'mode', launcher.footer(), colors, launcher.error or launcher.empty_message())
 
 
 def _draw_list_screen(stdscr, launcher, colors, rows, cols):
@@ -335,41 +336,14 @@ def _draw_list_screen(stdscr, launcher, colors, rows, cols):
     height = min(max(len(panel_rows), 1), max_visible) + 4
     y = max(1, (rows - height) // 2)
     _draw_panel(stdscr, y, x, width, panel_rows, cursor, launcher.title(), launcher.footer(), colors,
-                launcher.empty_message(), max_visible)
-
-
-def _draw_task_screen(stdscr, launcher, colors, rows, cols):
-    width, x = _panel_geometry(cols, 0)
-    height = 7  # border, blank, field, blank, message, footer, border
-    y = max(1, rows // 2 - height // 2)
-    _draw_box(stdscr, y, x, width, height, launcher.title(), _pair(colors, 'bright') | curses.A_BOLD)
-    field_y = y + 2
-    field_x = x + 2
-    field_width = max(1, width - 4)
-    text = launcher.task
-    pos = min(launcher.pos, len(text))
-    visible = text
-    if len(visible) > field_width:
-        start = max(0, pos - field_width + 1)
-        visible = visible[start:start + field_width]
-        pos -= start
-    _safe_addstr(stdscr, field_y, field_x, visible, _pair(colors, 'text') | curses.A_BOLD)
-    if pos <= len(visible) and pos < field_width:
-        caret_ch = visible[pos] if pos < len(visible) else ' '
-        _safe_addstr(stdscr, field_y, field_x + pos, caret_ch, curses.A_REVERSE)
-    message = launcher.flash or launcher.error
-    if message:
-        _safe_addstr(stdscr, y + height - 3, field_x, message[:field_width], _pair(colors, 'red'))
-    _safe_addstr(stdscr, y + height - 2, field_x, launcher.footer()[:field_width], _pair(colors, 'detail'))
+                launcher.error or launcher.empty_message(), max_visible)
 
 
 def _draw_screen(stdscr, launcher, rain, colors, rows, cols):
     is_home = launcher.screen == 'mode'
     if rain is not None:
         _draw_rain(stdscr, rain, colors, faint=not is_home)
-    if launcher.screen == 'task':
-        _draw_task_screen(stdscr, launcher, colors, rows, cols)
-    elif is_home:
+    if is_home:
         _draw_home(stdscr, launcher, colors, rows, cols)
     else:
         _draw_list_screen(stdscr, launcher, colors, rows, cols)
@@ -429,7 +403,9 @@ def run_ui(plain=False, launcher=None, call=None):
             if launcher.quit or launcher.launch_request is None:
                 return 0
             cmd, workspace = launcher.launch_request
-            sys.stdout.write('\033[2J\033[H')
+            # The banner stays in scrollback as a record of what the agent was given.
+            banner = f'oas: {launcher.agent} in {workspace} with the {launcher.mode} workflow ({len(cmd)} args)'
+            sys.stdout.write('\033[2J\033[H' + (banner if no_rain else f'\033[1;32m{banner}\033[0m') + '\n')
             sys.stdout.flush()
             code = call(cmd, cwd=workspace)
             launcher.returned(code)

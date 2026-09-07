@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MODES = ('development', 'research', 'ops', 'tutor', 'unattended')
 AGENTS = ('codex', 'claude', 'cursor', 'gemini', 'copilot', 'opencode', 'generic')
 SHARED_CHOICES = ('auto', 'always', 'never')
+DEFAULT_TASK = "Follow this workflow for the user's next request."
 # Markers and native global instruction paths shared with scripts/setup.py.
 MANAGED_START = '<!-- owens-agent-system:start -->'
 MANAGED_END = '<!-- owens-agent-system:end -->'
@@ -197,7 +198,10 @@ def implementor_overlay(workspace, worker):
 def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=None, worker_model=None, worker_effort=None):
     workspace = workspace_path(workspace)
     include, _ = shared_decision(agent, shared, home)
-    message = prompt(mode, task, include)
+    # An empty task opens a session that waits for the user: Claude gets no initial
+    # prompt, agents that need one get DEFAULT_TASK.
+    open_session = not task.strip()
+    message = prompt(mode, DEFAULT_TASK if open_session else task, include)
     lead_effort, worker = delegation(mode, lead_effort, worker_model, worker_effort)
     if agent not in AGENTS or agent == 'generic':
         raise ValueError('Generic agents use bundle, not run; select a native adapter')
@@ -222,7 +226,7 @@ def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=
             args += ['--effort', lead_effort]
         if worker:
             args += ['--agents', implementor_agent(worker)]
-        return args + ['--append-system-prompt', guidance(mode, include), task]
+        return args + ['--append-system-prompt', guidance(mode, include)] + ([] if open_session else [task])
     if agent == 'cursor':
         args = ['cursor-agent', '--workspace', str(workspace), '--sandbox', 'enabled']
         if mode == 'tutor':
@@ -453,7 +457,7 @@ def main(argv=None):
     p.add_argument('mode', choices=MODES)
     p.add_argument('--agent', choices=AGENTS, default='generic')
     p.add_argument('--output', required=True)
-    p.add_argument('--task', default='Follow this workflow for the user\'s next request.')
+    p.add_argument('--task', default=DEFAULT_TASK)
     p.add_argument('--shared', choices=SHARED_CHOICES, default='always')
     p = sub.add_parser('task')
     p.add_argument('mode', nargs='?', choices=MODES)

@@ -305,12 +305,13 @@ class WorkspaceScreenTest(OASUITestBase):
         missing_root = self.home / 'nope'
         self.assertEqual(oas_ui.scan_workspaces(missing_root, self.cwd), [])
 
-    def test_enter_on_directory_goes_to_task(self):
+    def test_enter_on_directory_sets_workspace_and_launches(self):
         launcher = self.enter_workspace_screen()
         launcher.cursor['workspace'] = 0
-        launcher.key('enter')
-        self.assertEqual(launcher.screen, 'task')
+        with patch.object(oas.shutil, 'which', return_value='/usr/bin/x'):
+            launcher.key('enter')
         self.assertEqual(launcher.workspace, self.cwd)
+        self.assertIsNotNone(launcher.launch_request)
 
     def test_enter_on_pick_opens_browser_at_home(self):
         launcher = self.enter_workspace_screen()
@@ -371,12 +372,13 @@ class BrowserTest(OASUITestBase):
         launcher.key('backspace')
         self.assertEqual(launcher.browser_dir, root)
 
-    def test_space_chooses_and_goes_to_task(self):
+    def test_space_chooses_current_folder_and_launches(self):
         launcher = self.enter_browser()
         target = launcher.browser_dir
-        launcher.key('space')
-        self.assertEqual(launcher.screen, 'task')
+        with patch.object(oas.shutil, 'which', return_value='/usr/bin/x'):
+            launcher.key('space')
         self.assertEqual(launcher.workspace, target)
+        self.assertIsNotNone(launcher.launch_request)
 
     def test_no_access_disabled(self):
         if hasattr(os, 'geteuid') and os.geteuid() == 0:
@@ -392,99 +394,57 @@ class BrowserTest(OASUITestBase):
 
 
 # ---------------------------------------------------------------------------
-# Task screen
+# Launch from the workspace choice
 # ---------------------------------------------------------------------------
 
-class TaskScreenTest(OASUITestBase):
-    def enter_task(self, agent='codex', mode='development'):
+class LaunchTest(OASUITestBase):
+    def ready(self, agent='codex', mode='development'):
         launcher = self.make()
         launcher.mode = mode
         launcher.agent = agent
-        launcher.workspace = self.cwd
-        launcher.screen = 'task'
-        launcher.task = ''
-        launcher.pos = 0
+        launcher._enter_workspace_screen()
+        launcher.cursor['workspace'] = 0
         return launcher
 
-    def test_insert_backspace_left_right_home_end(self):
-        launcher = self.enter_task()
-        launcher.key('h')
-        launcher.key('i')
-        self.assertEqual((launcher.task, launcher.pos), ('hi', 2))
-        launcher.key('backspace')
-        self.assertEqual((launcher.task, launcher.pos), ('h', 1))
-        launcher.task, launcher.pos = 'abc', 1
-        launcher.key('left')
-        self.assertEqual(launcher.pos, 0)
-        launcher.key('left')  # already at 0, no-op
-        self.assertEqual(launcher.pos, 0)
-        launcher.key('right')
-        self.assertEqual(launcher.pos, 1)
-        launcher.key('end')
-        self.assertEqual(launcher.pos, 3)
-        launcher.key('right')  # already at end
-        self.assertEqual(launcher.pos, 3)
-        launcher.key('home')
-        self.assertEqual(launcher.pos, 0)
-        launcher.key('x')
-        self.assertEqual((launcher.task, launcher.pos), ('xabc', 1))
-
-    def test_empty_task_flashes_and_stays(self):
-        launcher = self.enter_task()
-        launcher.task = '   '
-        launcher.key('enter')
-        self.assertEqual(launcher.flash, 'task required')
-        self.assertEqual(launcher.screen, 'task')
-        self.assertIsNone(launcher.launch_request)
-
-    def test_any_key_clears_flash(self):
-        launcher = self.enter_task()
-        launcher.key('enter')
-        self.assertIsNotNone(launcher.flash)
-        launcher.key('x')
-        self.assertIsNone(launcher.flash)
-
-    def test_esc_keeps_task_text(self):
-        launcher = self.enter_task()
-        launcher.task = 'keep this'
-        launcher.pos = len(launcher.task)
-        launcher.key('esc')
-        self.assertEqual(launcher.screen, 'workspace')
-        self.assertEqual(launcher.task, 'keep this')
-
-    def test_value_error_shown_for_claude_dash_task(self):
-        launcher = self.enter_task(agent='claude', mode='development')
-        launcher.task = '-oops'
-        launcher.pos = len(launcher.task)
-        launcher.key('enter')
-        self.assertIsNotNone(launcher.error)
-        self.assertIn('dash', launcher.error)
-        self.assertEqual(launcher.task, '-oops')
-        self.assertIsNone(launcher.launch_request)
-        self.assertEqual(launcher.screen, 'task')
-
-    def test_typing_clears_error(self):
-        launcher = self.enter_task(agent='claude', mode='development')
-        launcher.task = '-oops'
-        launcher.pos = len(launcher.task)
-        launcher.key('enter')
-        self.assertIsNotNone(launcher.error)
-        launcher.key('!')
-        self.assertIsNone(launcher.error)
-
-    def test_successful_launch_matches_oas_command(self):
+    def test_enter_on_workspace_launches_open_session(self):
         with patch.object(oas.shutil, 'which', return_value='/usr/bin/codex'):
-            launcher = self.enter_task(agent='codex', mode='development')
-            launcher.task = 'do the thing'
-            launcher.pos = len(launcher.task)
+            launcher = self.ready()
             launcher.key('enter')
         self.assertIsNotNone(launcher.launch_request)
         cmd, workspace_path = launcher.launch_request
-        # home must be the Launcher's own (tempdir) home, not the real Path.home(), so
-        # shared-guidance inclusion is decided from the fake home's managed-block state.
-        expected_cmd = oas.command('codex', 'development', self.cwd, 'do the thing', 'auto', self.home)
-        self.assertEqual(cmd, expected_cmd)
+        # home must be the Launcher's own home so shared-guidance detection never reads the real one.
+        self.assertEqual(cmd, oas.command('codex', 'development', self.cwd, '', 'auto', self.home))
+        self.assertTrue(cmd[-1].endswith(oas.DEFAULT_TASK))
         self.assertEqual(workspace_path, oas.workspace_path(self.cwd))
+        self.assertEqual(launcher.workspace, self.cwd)
+
+    def test_claude_open_session_has_no_prompt_argument(self):
+        with patch.object(oas.shutil, 'which', return_value='/usr/bin/claude'):
+            launcher = self.ready(agent='claude')
+            launcher.key('enter')
+        cmd, _ = launcher.launch_request
+        self.assertEqual(cmd[-2], '--append-system-prompt')
+        self.assertNotIn(oas.DEFAULT_TASK, cmd[-1])
+
+    def test_browser_space_launches_in_current_folder(self):
+        with patch.object(oas.shutil, 'which', return_value='/usr/bin/codex'):
+            launcher = self.ready()
+            launcher.cursor['workspace'] = len(launcher.rows()) - 1
+            launcher.key('enter')
+            self.assertEqual(launcher.screen, 'browser')
+            launcher.key('space')
+        self.assertIsNotNone(launcher.launch_request)
+        self.assertEqual(launcher.workspace, self.home)
+
+    def test_refusal_stays_on_screen_until_next_key(self):
+        with patch.object(oas.shutil, 'which', return_value=None):
+            launcher = self.ready()
+            launcher.key('enter')
+        self.assertIsNone(launcher.launch_request)
+        self.assertEqual(launcher.screen, 'workspace')
+        self.assertIn('not installed', launcher.error)
+        launcher.key('down')
+        self.assertIsNone(launcher.error)
 
 
 # ---------------------------------------------------------------------------
@@ -497,21 +457,15 @@ class ReturnedTest(OASUITestBase):
         launcher.mode = 'research'
         launcher.agent = 'gemini'
         launcher.workspace = self.cwd
-        launcher.screen = 'task'
-        launcher.task = 'leftover text'
-        launcher.pos = 5
+        launcher.screen = 'workspace'
         launcher.error = 'boom'
-        launcher.flash = 'flash'
         launcher.launch_request = (['x'], self.cwd)
 
         launcher.returned(0)
 
         self.assertEqual(launcher.last_exit, 0)
         self.assertEqual(launcher.screen, 'mode')
-        self.assertEqual(launcher.task, '')
-        self.assertEqual(launcher.pos, 0)
         self.assertIsNone(launcher.error)
-        self.assertIsNone(launcher.flash)
         self.assertIsNone(launcher.launch_request)
         self.assertEqual(launcher.mode, 'research')
         self.assertEqual(launcher.agent, 'gemini')
@@ -523,7 +477,7 @@ class ReturnedTest(OASUITestBase):
         launcher.mode = 'ops'
         launcher.agent = 'opencode'
         launcher.workspace = self.cwd
-        launcher.screen = 'task'
+        launcher.screen = 'workspace'
         launcher.returned(0)
 
         # cursor already parked on 'ops' row; select it
@@ -540,7 +494,7 @@ class ReturnedTest(OASUITestBase):
         launcher.mode = 'development'
         launcher.agent = 'codex'
         launcher.workspace = self.cwd
-        launcher.screen = 'task'
+        launcher.screen = 'workspace'
         launcher.returned(3)
         self.assertIn('last session exited 3', launcher.footer())
         launcher.key('enter')  # leaves mode screen
@@ -548,21 +502,14 @@ class ReturnedTest(OASUITestBase):
         self.assertIsNone(launcher.last_exit)
         self.assertNotIn('last session exited', launcher.footer())
 
-    def test_q_quits_on_list_screens_but_inserts_on_task_screen(self):
-        launcher = self.make()
-        launcher.mode = 'development'
-        launcher.agent = 'codex'
-        launcher.workspace = self.cwd
-        launcher.screen = 'task'
-        launcher.task = ''
-        launcher.pos = 0
-        launcher.key('q')
-        self.assertEqual(launcher.task, 'q')
-        self.assertFalse(launcher.quit)
-
-        launcher2 = self.make()
-        launcher2.key('q')
-        self.assertTrue(launcher2.quit)
+    def test_q_quits_on_every_screen(self):
+        for screen in oas_ui.SCREENS:
+            launcher = self.make()
+            launcher.mode = 'development'
+            launcher.agent = 'codex'
+            launcher.screen = screen
+            launcher.key('q')
+            self.assertTrue(launcher.quit, screen)
 
 
 # ---------------------------------------------------------------------------
@@ -785,8 +732,11 @@ class OpaqueForegroundTest(unittest.TestCase):
             for y in range(top, bottom + 1):
                 self.assertFalse(self.has_rain(lines[y][left:right + 1]), (keys, y, lines[y]))
             if not keys:
-                logo_rows = [l for l in lines[1:11] if '█' in l]
-                self.assertEqual(len(logo_rows), 10)
+                logo_rows = [l for l in lines[1:6] if '█' in l]
+                self.assertEqual(len(logo_rows), 5)
+                block = oas_screen.logo_lines("OWEN'S AGENTS")
+                self.assertEqual(len(block[0]), 70)
+                self.assertIn(block[0].strip(), logo_rows[0])
                 for l in logo_rows:
                     a = l.index('█'); b = l.rindex('█')
                     self.assertFalse(self.has_rain(l[a - 3:b + 4]), l)
