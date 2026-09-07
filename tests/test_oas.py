@@ -118,6 +118,33 @@ class OASTest(unittest.TestCase):
         self.assertIn('ask', oas.command('cursor', 'tutor', self.root, 'Teach me'))
         self.assertIn('--deny-tool', oas.command('copilot', 'tutor', self.root, 'Teach me'))
 
+    def test_claude_native_permission_modes(self):
+        expected = {
+            'development': 'auto',
+            'research': 'auto',
+            'ops': 'default',
+            'tutor': 'plan',
+        }
+        for mode, permission_mode in expected.items():
+            cmd = oas.command('claude', mode, self.root, 'Task')
+            index = cmd.index('--permission-mode')
+            self.assertEqual(cmd[index + 1], permission_mode, mode)
+            self.assertNotIn('acceptEdits', cmd)
+            self.assertNotIn('bypassPermissions', cmd)
+        settings = json.loads((Path(__file__).parents[1] / 'adapters/claude/settings.json').read_text())
+        self.assertEqual(settings['permissions']['defaultMode'], 'auto')
+        self.assertEqual(settings['permissions']['disableBypassPermissionsMode'], 'disable')
+
+    def test_claude_auto_rejects_known_ineligible_models(self):
+        for mode in ('development', 'research'):
+            for model in ('haiku', 'claude-haiku-4-5', 'claude-3-opus', 'claude-sonnet-4-5', 'claude-opus-4.5'):
+                with self.assertRaisesRegex(ValueError, 'auto mode', msg=f'{mode}/{model}'):
+                    oas.command('claude', mode, self.root, 'Task', model=model)
+        for mode in ('ops', 'tutor'):
+            self.assertIn('haiku', oas.command('claude', mode, self.root, 'Task', model='haiku'))
+        for model in (None, 'fable', 'sonnet', 'opus', 'claude-sonnet-5', 'claude-opus-4-7'):
+            oas.command('claude', 'development', self.root, 'Task', model=model)
+
     def test_unattended_unsupported_fails_closed(self):
         for agent in ('claude', 'cursor', 'copilot', 'opencode'):
             with self.assertRaises(ValueError):

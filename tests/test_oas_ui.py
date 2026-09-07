@@ -140,7 +140,7 @@ def expected_label(agent, mode):
     if agent == 'codex':
         return oas.config(mode)['sandbox_mode']
     if agent == 'claude':
-        return 'plan' if mode == 'tutor' else ('manual' if mode == 'ops' else 'acceptEdits')
+        return 'plan' if mode == 'tutor' else ('manual' if mode == 'ops' else 'auto')
     if agent == 'copilot':
         return 'plan' if mode == 'tutor' else 'interactive'
     if agent == 'opencode':
@@ -780,8 +780,8 @@ class ExitNoticeTest(unittest.TestCase):
 
 
 class ModelScreenTest(OASUITestBase):
-    def at_model(self, agent='codex'):
-        launcher = self.make()
+    def at_model(self, agent='codex', **kwargs):
+        launcher = self.make(**kwargs)
         launcher.mode = 'development'
         launcher.screen = 'agent'
         launcher.cursor['agent'] = list(oas.AGENTS).index(agent)
@@ -795,6 +795,14 @@ class ModelScreenTest(OASUITestBase):
         self.assertEqual([r.value for r in rows], [None, 'm-one', 'm-two', oas_ui.TYPE_MODEL])
         self.assertEqual(rows[0].text, oas_ui.INHERIT)
         self.assertNotIn('m-one', launcher.title())
+
+    def test_claude_auto_disables_known_ineligible_model(self):
+        launcher = self.at_model('claude', list_models=lambda agent: oas_ui.STATIC_MODELS[agent])
+        rows = {row.value: row for row in launcher.rows()}
+        self.assertEqual(rows['haiku'].disabled, 'auto unavailable')
+        self.assertIsNone(rows['fable'].disabled)
+        self.assertIsNone(rows['opus'].disabled)
+        self.assertIsNone(rows['sonnet'].disabled)
 
     def test_inherit_keeps_model_none_and_launch_has_no_model_flag(self):
         launcher = self.at_model()
@@ -883,4 +891,3 @@ class ModelChoicesTest(unittest.TestCase):
         class Bad(R):
             returncode = 1
         self.assertEqual(oas_ui.model_choices('opencode', run=lambda cmd, **kw: Bad()), [])
-

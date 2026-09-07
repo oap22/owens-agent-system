@@ -20,7 +20,7 @@ Owen-specific design choices: three child slots, a separate tutoring mode, draft
 
 ## Native adapter sources
 
-- [Claude Code permissions](https://code.claude.com/docs/en/permissions) and [CLI reference](https://code.claude.com/docs/en/cli-usage): explicit edit/manual/plan modes and additional settings. Validated against installed CLI help; these are approval modes, not universal filesystem isolation.
+- [Claude Code permission modes](https://code.claude.com/docs/en/permission-modes), [permissions](https://code.claude.com/docs/en/permissions), and [CLI reference](https://code.claude.com/docs/en/cli-reference): `auto`, `default`, and `plan` mappings plus the distinction between classifier-backed auto mode and unrestricted bypass mode. Auto eligibility still depends on the installed client, plan, model, provider, and organization policy; these modes are not universal filesystem isolation.
 - [GitHub Copilot CLI reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference): interactive prompt, plan mode, deny-tool patterns, and environment overrides. Documentation-checked; CLI unavailable locally.
 - [Cursor rules](https://prod.cursor.com/help/customization/rules): project rule discovery. CLI flags additionally checked in installed Cursor Agent help, including sandbox, ask mode, and auto-review.
 
