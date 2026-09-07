@@ -32,6 +32,11 @@ GLOBAL_INSTRUCTIONS = {
 }
 SHARED_PROMPTS = ('prompts/core.md', 'prompts/owen.md')
 TASK_HEADER = '\n\n# Current user task\n\n'
+# Effort levels documented for Claude Code; Codex accepts whatever the selected model advertises.
+EFFORTS = ('low', 'medium', 'high', 'xhigh', 'max')
+IMPLEMENTOR = 'implementor'
+IMPLEMENTOR_TOOLS = ['Read', 'Edit', 'Write', 'Grep', 'Glob', 'Bash']
+IMPLEMENTOR_MAX_TURNS = 30
 
 
 def read(path):
@@ -84,9 +89,10 @@ def flatten(data, prefix=''):
             yield name, value
 
 
-def overrides(mode):
+def overrides(mode, extra=None):
+    """Codex -c arguments for MODE; EXTRA is merged in so every key is emitted exactly once."""
     result = []
-    for key, value in flatten(config(mode)):
+    for key, value in flatten(merge(config(mode), extra or {})):
         result.extend(['-c', f'{key}={toml_value(value)}'])
     return result
 
@@ -144,23 +150,79 @@ def workspace_path(value):
     return path
 
 
-def command(agent, mode, workspace, task, shared='auto', home=None):
+def role(name):
+    """Parsed role layer from config/agents/NAME.toml."""
+    return tomllib.loads(read(ROOT / f'config/agents/{name}.toml'))
+
+
+def delegation(mode, lead_effort=None, worker_model=None, worker_effort=None):
+    """Validate lead/worker options; return (lead_effort, worker) where worker is a dict or None."""
+    for value in (lead_effort, worker_effort):
+        if value is not None and value not in EFFORTS:
+            raise ValueError(f'Effort must be one of {", ".join(EFFORTS)}')
+    if worker_model is not None and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:-]*', worker_model):
+        raise ValueError('Worker model must be a plain alias or model identifier')
+    worker = {k: v for k, v in (('model', worker_model), ('effort', worker_effort)) if v is not None}
+    if worker and not config(mode).get('agents', {}).get('enabled', False):
+        raise ValueError(f'{mode} disables delegation; worker options are not allowed')
+    return lead_effort, worker or None
+
+
+def implementor_agent(worker):
+    """Claude Code --agents JSON for the implementor, sharing the Codex role text."""
+    layer = role(IMPLEMENTOR)
+    spec = dict(description=config('development')['agents'][IMPLEMENTOR]['description'],
+                prompt=layer['developer_instructions'].strip(), tools=list(IMPLEMENTOR_TOOLS), maxTurns=IMPLEMENTOR_MAX_TURNS)
+    spec.update(worker or {})
+    return json.dumps({IMPLEMENTOR: spec}, ensure_ascii=False)
+
+
+def implementor_overlay(workspace, worker):
+    """Write the implementor role layer plus worker overrides under WORKSPACE/.oas/roles and return its path."""
+    path = Path(workspace) / '.oas/roles' / f'{IMPLEMENTOR}.toml'
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ValueError(f'{path} must be a regular file or absent')
+    lines = [read(ROOT / f'config/agents/{IMPLEMENTOR}.toml').rstrip(), '# Launch-time worker overrides written by scripts/oas.py; regenerated on every launch.']
+    if 'model' in worker:
+        lines.append(f'model = {toml_value(worker["model"])}')
+    if 'effort' in worker:
+        lines.append(f'model_reasoning_effort = {toml_value(worker["effort"])}')
+    content = '\n'.join(lines) + '\n'
+    tomllib.loads(content)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding='utf-8')
+    return path
+
+
+def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=None, worker_model=None, worker_effort=None):
     workspace = workspace_path(workspace)
     include, _ = shared_decision(agent, shared, home)
     message = prompt(mode, task, include)
+    lead_effort, worker = delegation(mode, lead_effort, worker_model, worker_effort)
     if agent not in AGENTS or agent == 'generic':
         raise ValueError('Generic agents use bundle, not run; select a native adapter')
     if mode == 'unattended' and agent != 'codex':
         raise ValueError('Unattended permission mapping is only implemented for Codex; use bundle to design a native audited job')
+    if agent not in ('codex', 'claude') and (lead_effort or worker):
+        raise ValueError(f'Lead effort and worker options are implemented for codex and claude only, not {agent}')
     if agent == 'codex':
-        return ['codex', '--strict-config', *overrides(mode), '-C', str(workspace), message]
+        extra = {}
+        if lead_effort:
+            extra['model_reasoning_effort'] = lead_effort
+        if worker:
+            extra['agents'] = {IMPLEMENTOR: {'config_file': str(implementor_overlay(workspace, worker))}}
+        return ['codex', '--strict-config', *overrides(mode, extra), '-C', str(workspace), message]
     if agent == 'claude':
         native_mode = 'plan' if mode == 'tutor' else ('manual' if mode == 'ops' else 'acceptEdits')
         # Guidance is system-level context for Claude Code; the raw task is the user turn.
         if task.lstrip().startswith('-'):
             raise ValueError('Claude receives the task as a positional prompt; it must not start with a dash')
-        return ['claude', '--settings', str(ROOT / 'adapters/claude/settings.json'), '--permission-mode', native_mode,
-                '--append-system-prompt', guidance(mode, include), task]
+        args = ['claude', '--settings', str(ROOT / 'adapters/claude/settings.json'), '--permission-mode', native_mode]
+        if lead_effort:
+            args += ['--effort', lead_effort]
+        if worker:
+            args += ['--agents', implementor_agent(worker)]
+        return args + ['--append-system-prompt', guidance(mode, include), task]
     if agent == 'cursor':
         args = ['cursor-agent', '--workspace', str(workspace), '--sandbox', 'enabled']
         if mode == 'tutor':
@@ -331,6 +393,9 @@ def check(skills_root=None):
     if not all(s['mode'] in MODES and s['expected'] and s['checks'] for s in items):
         raise ValueError('Every evaluation scenario needs a valid mode, expected list, and checks list')
     json.loads(read(ROOT / 'adapters/claude/settings.json'))
+    if IMPLEMENTOR not in config('development')['agents'] or not role(IMPLEMENTOR).get('developer_instructions', '').strip():
+        raise ValueError('The implementor role must be registered with nonempty developer_instructions')
+    json.loads(implementor_agent({'effort': 'low'}))
     skills_root = Path.home() / 'Developer/active/skills/skills' if skills_root is None else Path(skills_root)
     if skills_root.is_dir():
         for name in sorted(routed_skills()):
@@ -353,6 +418,9 @@ def main(argv=None):
         p.add_argument('--workspace', required=True)
         p.add_argument('--task', required=True)
         p.add_argument('--shared', choices=SHARED_CHOICES, default='auto', help='Include shared prompts; auto omits them when the agent\'s global instructions carry them')
+        p.add_argument('--lead-effort', choices=EFFORTS, help='Reasoning effort for the lead session (codex and claude only)')
+        p.add_argument('--worker-model', help='Model alias or identifier for the implementor role (codex and claude only)')
+        p.add_argument('--worker-effort', choices=EFFORTS, help='Reasoning effort for the implementor role (codex and claude only)')
     p = sub.add_parser('doctor')
     p.add_argument('mode', choices=MODES)
     p = sub.add_parser('export', help='Export Codex settings without overwriting')
@@ -398,7 +466,8 @@ def main(argv=None):
             return subprocess.call(['codex', '--strict-config', *overrides(args.mode), 'doctor', '--summary'], cwd=ROOT)
         else:
             workspace = workspace_path(args.workspace)
-            cmd = command(args.agent, args.mode, workspace, args.task, args.shared)
+            cmd = command(args.agent, args.mode, workspace, args.task, args.shared,
+                          lead_effort=args.lead_effort, worker_model=args.worker_model, worker_effort=args.worker_effort)
             if args.action == 'preview':
                 include, reason = shared_decision(args.agent, args.shared)
                 print(f'shared guidance {"included" if include else "omitted"}: {reason}', file=sys.stderr)

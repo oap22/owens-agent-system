@@ -25,5 +25,9 @@ config_file = "agents/reviewer.toml"
 description = "Implement a clearly owned slice and verify it. Never revert another contributor's work."
 config_file = "agents/builder.toml"
 
+[agents.implementor]
+description = "Execute one task packet cheaply: owned paths, named entry points, one acceptance check, short report. Escalates instead of looping."
+config_file = "agents/implementor.toml"
+
 [apps._default]
 default_tools_approval_mode = "writes"

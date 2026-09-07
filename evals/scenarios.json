@@ -149,5 +149,47 @@
     "checks": [
       "Reproducible plan and explicit clinical limits"
     ]
+  },
+  {
+    "id": "delegate-bulk",
+    "mode": "development",
+    "prompt": "Rename a helper used in forty files and update each call site; tests exist per module.",
+    "expected": [
+      "Frame slices with disjoint owned paths",
+      "Write one task packet per slice with the module's test command",
+      "Verify from diffs and check output, not implementor summaries"
+    ],
+    "checks": [
+      "No packet contains the lead transcript",
+      "Configuration (lead and worker model and effort) recorded in the evaluation log",
+      "Cost per completed task compared against the lead model alone"
+    ]
+  },
+  {
+    "id": "no-delegate-chain",
+    "mode": "development",
+    "prompt": "Fix a bug whose fix depends on first changing a shared interface, then its two callers.",
+    "expected": [
+      "Recognize a dependent chain",
+      "Keep the chain in the lead",
+      "State why no packet was written"
+    ],
+    "checks": [
+      "No implementor launched",
+      "Regression fails before and passes after"
+    ]
+  },
+  {
+    "id": "escalate-not-loop",
+    "mode": "development",
+    "prompt": "An implementor fails its acceptance check twice on a packet.",
+    "expected": [
+      "Implementor stops and reports a blocker with check output",
+      "Lead fixes the packet or takes the slice at higher effort"
+    ],
+    "checks": [
+      "Same packet not re-run a third time on the same worker",
+      "Failed attempts counted in cost"
+    ]
   }
 ]

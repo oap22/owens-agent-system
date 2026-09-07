@@ -380,6 +380,75 @@ class OASTest(unittest.TestCase):
             self.assertEqual(oas.main(['check', '--skills-root', str(self.root / 'absent')]), 0)
         self.assertIn('skills repo not present; routing check skipped', err.getvalue())
 
+    def test_lead_effort_maps_per_harness(self):
+        cmd = oas.command('codex', 'development', self.root, 'Task', lead_effort='xhigh')
+        self.assertIn('model_reasoning_effort="xhigh"', cmd)
+        self.assertEqual(cmd[cmd.index('model_reasoning_effort="xhigh"') - 1], '-c')
+        cmd = oas.command('claude', 'development', self.root, 'Task', shared='never', lead_effort='high')
+        self.assertEqual(cmd[cmd.index('--effort') + 1], 'high')
+        self.assertEqual(cmd[-1], 'Task')
+        for cmd in (oas.command('codex', 'development', self.root, 'Task'), oas.command('claude', 'development', self.root, 'Task')):
+            self.assertNotIn('--effort', cmd)
+            self.assertFalse(any('model_reasoning_effort' in a for a in cmd))
+        with self.assertRaises(ValueError):
+            oas.command('codex', 'development', self.root, 'Task', lead_effort='ultra')
+
+    def test_worker_options_define_implementor_for_claude(self):
+        cmd = oas.command('claude', 'development', self.root, 'Task', shared='never', worker_model='sonnet', worker_effort='low')
+        spec = json.loads(cmd[cmd.index('--agents') + 1])
+        self.assertEqual(list(spec), ['implementor'])
+        agent = spec['implementor']
+        self.assertEqual((agent['model'], agent['effort'], agent['maxTurns']), ('sonnet', 'low', oas.IMPLEMENTOR_MAX_TURNS))
+        self.assertEqual(agent['tools'], oas.IMPLEMENTOR_TOOLS)
+        self.assertEqual(agent['prompt'], oas.role('implementor')['developer_instructions'].strip())
+        self.assertTrue(agent['description'])
+        self.assertEqual(cmd[-3], '--append-system-prompt')
+        self.assertNotIn('model', json.loads(oas.implementor_agent({'effort': 'medium'}))['implementor'])
+        self.assertNotIn('--agents', oas.command('claude', 'development', self.root, 'Task', shared='never'))
+
+    def test_worker_options_write_codex_overlay(self):
+        cmd = oas.command('codex', 'development', self.root, 'Task', worker_model='gpt-mini', worker_effort='low')
+        keys = [a for a in cmd if a.startswith('agents.implementor.config_file=')]
+        self.assertEqual(len(keys), 1)
+        self.assertEqual(sum(a.startswith('model_reasoning_effort=') for a in oas.command('codex', 'development', self.root, 'T', lead_effort='low')), 1)
+        path = Path(json.loads(keys[0].split('=', 1)[1]))
+        self.assertEqual(path, self.root / '.oas/roles/implementor.toml')
+        layer = tomllib.loads(path.read_text(encoding='utf-8'))
+        self.assertEqual((layer['model'], layer['model_reasoning_effort'], layer['sandbox_mode']), ('gpt-mini', 'low', 'workspace-write'))
+        self.assertEqual(layer['developer_instructions'], oas.role('implementor')['developer_instructions'])
+        oas.command('codex', 'development', self.root, 'Task', worker_effort='medium')
+        layer = tomllib.loads(path.read_text(encoding='utf-8'))
+        self.assertNotIn('model', layer); self.assertEqual(layer['model_reasoning_effort'], 'medium')
+        plain = [a for a in oas.command('codex', 'development', self.root, 'Task') if a.startswith('agents.implementor.config_file=')]
+        self.assertEqual(plain, [f'agents.implementor.config_file={oas.toml_value(str(oas.ROOT / "config/agents/implementor.toml"))}'])
+        path.unlink(); path.symlink_to(self.root / 'elsewhere')
+        with self.assertRaises(ValueError):
+            oas.command('codex', 'development', self.root, 'Task', worker_effort='low')
+
+    def test_delegation_refused_where_unsupported(self):
+        for agent in ('cursor', 'gemini', 'copilot', 'opencode'):
+            with self.assertRaises(ValueError, msg=agent):
+                oas.command(agent, 'development', self.root, 'Task', lead_effort='high')
+            with self.assertRaises(ValueError, msg=agent):
+                oas.command(agent, 'development', self.root, 'Task', worker_effort='low')
+        for mode in ('tutor', 'unattended'):
+            with self.assertRaises(ValueError, msg=mode):
+                oas.command('codex', mode, self.root, 'Task', worker_effort='low')
+        self.assertIn('model_reasoning_effort="high"', oas.command('codex', 'unattended', self.root, 'Task', lead_effort='high'))
+        for model in ('-p', 'a b', '', 'x;y'):
+            with self.assertRaises(ValueError, msg=model):
+                oas.command('claude', 'development', self.root, 'Task', worker_model=model)
+        self.assertFalse((self.root / '.oas').exists())
+
+    def test_preview_accepts_delegation_flags(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(oas.main(['preview', 'development', '--agent', 'claude', '--workspace', str(self.root), '--task', 'x',
+                                       '--lead-effort', 'xhigh', '--worker-model', 'haiku', '--worker-effort', 'low']), 0)
+            self.assertEqual(oas.main(['preview', 'development', '--agent', 'cursor', '--workspace', str(self.root), '--task', 'x', '--lead-effort', 'high']), 2)
+        self.assertIn('--effort xhigh', out.getvalue())
+        self.assertIn('--agents', out.getvalue())
+
     def test_text_io_declares_utf8(self):
         source = SOURCE.read_text(encoding='utf-8')
         for match in re.finditer(r'\.(read_text|write_text)\(([^)]*)\)', source):

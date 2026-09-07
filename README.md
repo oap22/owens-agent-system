@@ -16,6 +16,14 @@ python3 scripts/oas.py preview development --workspace /absolute/path/to/project
 python3 scripts/oas.py run development --agent claude --workspace /absolute/path/to/project --task "Fix the failing CSV import and verify it"
 ```
 
+For heavy work, run a strong lead at high effort and hand bulk slices to a cheaper implementor:
+
+```sh
+python3 scripts/oas.py run development --agent claude --workspace /absolute/path/to/project --task "Use the task contract in .oas/<id>/task.json" --lead-effort xhigh --worker-model sonnet --worker-effort low
+```
+
+`--lead-effort` sets the lead session's reasoning effort; `--worker-model` and `--worker-effort` define the `implementor` role (a Claude Code subagent passed inline, or a Codex role layer written under the workspace's ignored `.oas/roles/`). Codex and Claude only; other adapters refuse the options. The lead delegates by task packet and verifies from diffs, per [[docs/token-economy]] and [[templates/task-packet]]. No model identifier is stored in this repository.
+
 `preview` prints the exact command and assembled instructions without starting an agent. `run` opens the selected agent in the target workspace with the same core instructions and its native permission controls. `--agent` defaults to `codex`; use `claude`, `cursor`, `gemini`, `copilot`, or `opencode` to switch. Both accept `--shared auto|always|never` (default `auto`): `auto` omits `prompts/core.md` and `prompts/owen.md` when the agent's global instruction file already contains the current managed block, `always` sends them regardless, and `never` omits them; the workflow and task are always sent. Existing account login, installed skills, and connectors remain available where that agent supports them. It does not overwrite your global configuration or project instructions. Choose a task worktree first for development; see [[workflows/development]].
 
 | Mode | Use it for | Codex permission mapping |
@@ -45,7 +53,7 @@ Bundles target `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, Copilot instructions, or C
 
 ## What is included
 
-- `config/config.toml`: Codex permissions and bounded specialist roles.
+- `config/config.toml`: Codex permissions and bounded specialist roles, including the `implementor` role shared with Claude Code delegation.
 - `adapters/`: agent-native settings; shared workflows remain in one place.
 - `config/profiles/`: mode-specific settings; these are source layers, not legacy inline Codex profiles.
 - `prompts/`: concise shared guidance and a sanitized working profile.
@@ -62,7 +70,7 @@ Run `python3 -m unittest discover -s tests -v` and `python3 scripts/oas.py check
 
 The initial defaults are evidence-informed, not demonstrated optimal. Judge them against your own completed tasks using [[evals/README]]. Never promote a prompt change solely because its author says it improved.
 
-See [[docs/architecture]], [[docs/permissions]], [[docs/setup]], and [[docs/personalization]] for the design and adoption path.
+See [[docs/architecture]], [[docs/permissions]], [[docs/setup]], [[docs/personalization]], and [[docs/token-economy]] for the design and adoption path.
 
 ## Use it in your normal agent sessions
 
