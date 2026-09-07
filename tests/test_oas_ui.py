@@ -49,7 +49,6 @@ class OASUITestBase(unittest.TestCase):
         kwargs.setdefault('cwd', self.cwd)
         kwargs.setdefault('which', which or always_which())
         kwargs.setdefault('list_models', lambda agent: ['m-one', 'm-two'])
-        kwargs.setdefault('environ', {'GEMINI_API_KEY': 'test-key'})   # temp homes have no Gemini login
         return oas_ui.Launcher(**kwargs)
 
     def repo(self, name, root=None):
@@ -142,8 +141,6 @@ def expected_label(agent, mode):
         return oas.config(mode)['sandbox_mode']
     if agent == 'claude':
         return 'plan' if mode == 'tutor' else ('manual' if mode == 'ops' else 'acceptEdits')
-    if agent == 'gemini':
-        return 'plan' if mode == 'tutor' else 'default'
     if agent == 'copilot':
         return 'plan' if mode == 'tutor' else 'interactive'
     if agent == 'opencode':
@@ -184,11 +181,11 @@ class AgentScreenTest(OASUITestBase):
             self.assertEqual(rows[agent].detail, '')
 
     def test_not_installed_disabled(self):
-        which = lambda name: None if name == 'gemini' else '/usr/bin/' + name
+        which = lambda name: None if name == 'copilot' else '/usr/bin/' + name
         launcher = self.enter_agent_screen('development', which=which)
         rows = {r.value: r for r in launcher.rows()}
-        self.assertEqual(rows['gemini'].disabled, 'not installed')
-        self.assertEqual(rows['gemini'].detail, '')
+        self.assertEqual(rows['copilot'].disabled, 'not installed')
+        self.assertEqual(rows['copilot'].detail, '')
         self.assertIsNone(rows['codex'].disabled)
 
     def test_permission_label_pure_function_cursor_variants(self):
@@ -204,8 +201,8 @@ class AgentScreenTest(OASUITestBase):
 
 class CursorSkippingTest(OASUITestBase):
     def test_skips_disabled_rows_both_directions(self):
-        which = lambda name: None if name in ('claude', 'gemini') else '/usr/bin/' + name
-        # NATIVE_AGENTS order: codex, claude, cursor, gemini, copilot, opencode
+        which = lambda name: None if name in ('claude', 'copilot') else '/usr/bin/' + name
+        # native agent order: codex, claude, cursor, copilot, opencode
         launcher = self.make(which=which)
         launcher.mode = 'development'
         launcher.screen = 'agent'
@@ -213,9 +210,9 @@ class CursorSkippingTest(OASUITestBase):
         launcher.key('down')  # should skip disabled claude, land on cursor
         rows = launcher.rows()
         self.assertEqual(rows[launcher.cursor['agent']].value, 'cursor')
-        launcher.key('down')  # skip disabled gemini, land on copilot
-        self.assertEqual(rows[launcher.cursor['agent']].value, 'copilot')
-        launcher.key('up')  # skip disabled gemini back to cursor
+        launcher.key('down')  # skip disabled copilot, land on opencode
+        self.assertEqual(rows[launcher.cursor['agent']].value, 'opencode')
+        launcher.key('up')  # skip disabled copilot back to cursor
         self.assertEqual(rows[launcher.cursor['agent']].value, 'cursor')
         launcher.key('up')  # skip disabled claude, land back on codex
         self.assertEqual(rows[launcher.cursor['agent']].value, 'codex')
@@ -461,7 +458,7 @@ class ReturnedTest(OASUITestBase):
     def test_returned_preselects_and_clears_task(self):
         launcher = self.make()
         launcher.mode = 'research'
-        launcher.agent = 'gemini'
+        launcher.agent = 'copilot'
         launcher.workspace = self.cwd
         launcher.screen = 'workspace'
         launcher.error = 'boom'
@@ -474,7 +471,7 @@ class ReturnedTest(OASUITestBase):
         self.assertIsNone(launcher.error)
         self.assertIsNone(launcher.launch_request)
         self.assertEqual(launcher.mode, 'research')
-        self.assertEqual(launcher.agent, 'gemini')
+        self.assertEqual(launcher.agent, 'copilot')
         self.assertEqual(launcher.workspace, self.cwd)
         self.assertEqual(launcher.cursor['mode'], oas.MODES.index('research'))
 
@@ -873,7 +870,7 @@ class ModelChoicesTest(unittest.TestCase):
 
     def test_model_choices_static_and_failure_paths(self):
         self.assertEqual(oas_ui.model_choices('claude'), ['fable', 'opus', 'sonnet', 'haiku'])
-        self.assertEqual(oas_ui.model_choices('gemini'), [])
+        self.assertEqual(oas_ui.model_choices('nonesuch'), [])
         ran = []
         class R:
             returncode = 0
@@ -887,31 +884,3 @@ class ModelChoicesTest(unittest.TestCase):
             returncode = 1
         self.assertEqual(oas_ui.model_choices('opencode', run=lambda cmd, **kw: Bad()), [])
 
-
-class LoginHintTest(OASUITestBase):
-    def test_gemini_without_auth_is_flagged_and_not_launched(self):
-        self.assertIsNotNone(oas_ui.login_hint('gemini', self.home, {}))
-        for agent in ('codex', 'claude', 'cursor', 'copilot', 'opencode'):
-            self.assertIsNone(oas_ui.login_hint(agent, self.home, {}), agent)
-        launcher = self.make(environ={})
-        launcher.mode = 'development'; launcher.screen = 'agent'
-        launcher.cursor['agent'] = list(oas.AGENTS).index('gemini')
-        rows = {r.value: r for r in launcher.rows()}
-        self.assertEqual(rows['gemini'].detail, 'login needed')
-        self.assertIsNone(rows['gemini'].disabled)
-        launcher.key('enter'); launcher.key('enter')   # model: inherit
-        launcher.cursor['workspace'] = 0
-        with patch.object(oas.shutil, 'which', return_value='/usr/bin/gemini'):
-            launcher.key('enter')
-        self.assertIsNone(launcher.launch_request)
-        self.assertIn('login needed', launcher.error)
-
-    def test_gemini_auth_signals_clear_the_hint(self):
-        self.assertIsNone(oas_ui.login_hint('gemini', self.home, {'GEMINI_API_KEY': 'k'}))
-        g = self.home / '.gemini'; g.mkdir()
-        (g / 'settings.json').write_text('{"security": {"auth": {"selectedType": "oauth-personal"}}}', encoding='utf-8')
-        self.assertIsNone(oas_ui.login_hint('gemini', self.home, {}))
-        (g / 'settings.json').write_text('not json', encoding='utf-8')
-        self.assertIsNotNone(oas_ui.login_hint('gemini', self.home, {}))
-        (g / 'oauth_creds.json').write_text('{}', encoding='utf-8')
-        self.assertIsNone(oas_ui.login_hint('gemini', self.home, {}))

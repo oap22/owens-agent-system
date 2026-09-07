@@ -86,7 +86,7 @@ class SetupTest(unittest.TestCase):
         counts=m.rollback_apply(actions)
         self.assertEqual(counts['keep'],1)
         self.assertEqual(edited.read_text(encoding='utf-8'),'edited later')
-        self.assertFalse((self.home/'.gemini/GEMINI.md').exists())
+        self.assertFalse((self.home/'.copilot/copilot-instructions.md').exists())
     def test_rollback_reports_absent_created_file(self):
         _,backup=self.install()
         gone=self.home/'.local/bin/oas';gone.unlink()
@@ -102,14 +102,14 @@ class SetupTest(unittest.TestCase):
         _,backup=self.install()
         before=self.snapshot()
         actions=m.rollback_plan(self.home,backup)
-        self.assertEqual(len(actions),16)
+        self.assertEqual(len(actions),14)
         self.assertEqual(self.snapshot(),before)
         out=subprocess.run([sys.executable,str(self.source/'scripts/setup.py'),'--home',str(self.home),'--rollback',str(backup)],capture_output=True,text=True,check=True).stdout
         self.assertIn('restore: .claude/CLAUDE.md',out);self.assertIn('remove: .codex/AGENTS.md',out);self.assertIn('preview only',out)
         self.assertEqual(self.snapshot(),before)
     def test_rollback_symlink_refused(self):
         _,backup=self.install()
-        p=self.home/'.gemini/GEMINI.md';p.unlink();p.symlink_to(self.home/'elsewhere')
+        p=self.home/'.copilot/copilot-instructions.md';p.unlink();p.symlink_to(self.home/'elsewhere')
         with self.assertRaises(ValueError):m.rollback_plan(self.home,backup)
         self.assertTrue(p.is_symlink())
     def test_rollback_refuses_paths_outside_home(self):

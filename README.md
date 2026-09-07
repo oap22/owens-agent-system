@@ -1,6 +1,6 @@
 # Owen's Agent System
 
-A personal operating system for research, software development, everyday operations, and learning. Shared across coding agents, with native launch adapters for Codex, Claude Code, Cursor, Gemini CLI, and GitHub Copilot.
+A personal operating system for research, software development, everyday operations, and learning. Shared across coding agents, with native launch adapters for Codex, Claude Code, Cursor, GitHub Copilot, and OpenCode.
 
 **The loop: Frame → Work → Prove → Hand off.** Every substantial task has an outcome, an ownership boundary, evidence, and a next action. Simple requests stay simple.
 
@@ -24,7 +24,7 @@ python3 scripts/oas.py run development --agent claude --workspace /absolute/path
 
 `--lead-effort` sets the lead session's reasoning effort; `--worker-model` and `--worker-effort` define the `implementor` role (a Claude Code subagent passed inline, or a Codex role layer written under the workspace's ignored `.oas/roles/`). Codex and Claude only; other adapters refuse the options. The lead delegates by task packet and verifies from diffs, per [[docs/token-economy]] and [[templates/task-packet]]. No model identifier is stored in this repository.
 
-`preview` prints the exact command and assembled instructions without starting an agent. `run` opens the selected agent in the target workspace with the same core instructions and its native permission controls. `--agent` defaults to `codex`; use `claude`, `cursor`, `gemini`, `copilot`, or `opencode` to switch. `--model ALIAS_OR_ID` picks the session model through the agent's native flag; omit it to inherit your current default. Both accept `--shared auto|always|never` (default `auto`): `auto` omits `prompts/core.md` and `prompts/owen.md` when the agent's global instruction file already contains the current managed block, `always` sends them regardless, and `never` omits them; the workflow and task are always sent. Existing account login, installed skills, and connectors remain available where that agent supports them. It does not overwrite your global configuration or project instructions. Choose a task worktree first for development; see [[workflows/development]].
+`preview` prints the exact command and assembled instructions without starting an agent. `run` opens the selected agent in the target workspace with the same core instructions and its native permission controls. `--agent` defaults to `codex`; use `claude`, `cursor`, `copilot`, or `opencode` to switch. `--model ALIAS_OR_ID` picks the session model through the agent's native flag; omit it to inherit your current default. Both accept `--shared auto|always|never` (default `auto`): `auto` omits `prompts/core.md` and `prompts/owen.md` when the agent's global instruction file already contains the current managed block, `always` sends them regardless, and `never` omits them; the workflow and task are always sent. Existing account login, installed skills, and connectors remain available where that agent supports them. It does not overwrite your global configuration or project instructions. Choose a task worktree first for development; see [[workflows/development]].
 
 | Mode | Use it for | Codex permission mapping |
 |---|---|---|
@@ -49,7 +49,7 @@ python3 scripts/oas.py bundle development --agent cursor --output /tmp/owen-curs
 python3 scripts/oas.py bundle research --agent generic --output /tmp/owen-generic-bundle
 ```
 
-Bundles target `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, Copilot instructions, or Cursor rules. They are created in a fresh directory for review, so existing project files are never overwritten. The generic bundle can be attached or pasted into any agent that accepts instructions. Native controls differ; see [[docs/adapters]] before use.
+Bundles target `AGENTS.md`, `CLAUDE.md`, Copilot instructions, or Cursor rules. They are created in a fresh directory for review, so existing project files are never overwritten. The generic bundle can be attached or pasted into any agent that accepts instructions. Native controls differ; see [[docs/adapters]] before use.
 
 ## Interactive launcher
 
@@ -78,4 +78,4 @@ See [[docs/architecture]], [[docs/permissions]], [[docs/setup]], [[docs/personal
 
 ## Use it in your normal agent sessions
 
-Run `python3 scripts/setup.py` to preview global setup, then `python3 scripts/setup.py --apply` from the permanent clone. This installs shared guidance for Codex, Claude Code, Cursor, Gemini CLI, GitHub Copilot CLI, and OpenCode, preserves existing personal instructions, and creates local backups. After setup, the launcher detects the installed block and sends only the workflow and task. `python3 scripts/setup.py --rollback BACKUP_DIR` previews a rollback and `--apply` executes it. See [[docs/setup]] for permission changes, login requirements, and rollback.
+Run `python3 scripts/setup.py` to preview global setup, then `python3 scripts/setup.py --apply` from the permanent clone. This installs shared guidance for Codex, Claude Code, Cursor, GitHub Copilot CLI, and OpenCode, preserves existing personal instructions, and creates local backups. After setup, the launcher detects the installed block and sends only the workflow and task. `python3 scripts/setup.py --rollback BACKUP_DIR` previews a rollback and `--apply` executes it. See [[docs/setup]] for permission changes, login requirements, and rollback.

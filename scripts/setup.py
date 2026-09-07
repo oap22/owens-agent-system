@@ -84,7 +84,6 @@ def plan(home, source):
     patches = {
         '.claude/settings.json': {'permissions': {'disableBypassPermissionsMode':'disable'}},
         '.cursor/cli-config.json': {'sandbox': {'mode':'enabled'},'approvalMode':'allowlist'},
-        '.gemini/settings.json': {'general':{'defaultApprovalMode':'default'},'tools':{'sandbox':True}},
         '.config/opencode/opencode.json': {'permission':{'*':'ask','read':'allow','glob':'allow','grep':'allow','list':'allow','edit':'allow','external_directory':'ask','doom_loop':'ask'}},
     }
     for relative, patch in patches.items():

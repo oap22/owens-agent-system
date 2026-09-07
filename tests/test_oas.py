@@ -116,11 +116,10 @@ class OASTest(unittest.TestCase):
     def test_native_tutor_controls(self):
         self.assertIn('plan', oas.command('claude', 'tutor', self.root, 'Teach me'))
         self.assertIn('ask', oas.command('cursor', 'tutor', self.root, 'Teach me'))
-        self.assertIn('plan', oas.command('gemini', 'tutor', self.root, 'Teach me'))
         self.assertIn('--deny-tool', oas.command('copilot', 'tutor', self.root, 'Teach me'))
 
     def test_unattended_unsupported_fails_closed(self):
-        for agent in ('claude', 'cursor', 'gemini', 'copilot', 'opencode'):
+        for agent in ('claude', 'cursor', 'copilot', 'opencode'):
             with self.assertRaises(ValueError):
                 oas.command(agent, 'unattended', self.root, 'job')
 
@@ -259,7 +258,7 @@ class OASTest(unittest.TestCase):
             self.assertIn('Shared guidance is loaded from your global instructions; this is the development workflow.', ' '.join(cmd))
             self.assertTrue(cmd[-1].endswith('Task'))
             self.assertIn(core, ' '.join(oas.command(agent, 'development', self.root, 'Task', shared='always', home=self.home)))
-        self.assertNotIn(core, ' '.join(oas.command('gemini', 'development', self.root, 'Task', shared='never', home=self.home)))
+        self.assertNotIn(core, ' '.join(oas.command('copilot', 'development', self.root, 'Task', shared='never', home=self.home)))
         with self.assertRaises(ValueError):
             oas.command('codex', 'development', self.root, 'Task', shared='sometimes', home=self.home)
 
@@ -426,7 +425,7 @@ class OASTest(unittest.TestCase):
             oas.command('codex', 'development', self.root, 'Task', worker_effort='low')
 
     def test_delegation_refused_where_unsupported(self):
-        for agent in ('cursor', 'gemini', 'copilot', 'opencode'):
+        for agent in ('cursor', 'copilot', 'opencode'):
             with self.assertRaises(ValueError, msg=agent):
                 oas.command(agent, 'development', self.root, 'Task', lead_effort='high')
             with self.assertRaises(ValueError, msg=agent):

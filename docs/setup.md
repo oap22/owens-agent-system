@@ -16,7 +16,7 @@ Rollback: stop the new session and start Codex normally. Because the launcher do
 
 ## Other agents
 
-Use `run MODE --agent claude|cursor|gemini|copilot` with the same workspace and task arguments. Review [[docs/adapters]] for the native controls and installed-version evidence. A missing CLI is reported before launch.
+Use `run MODE --agent claude|cursor|copilot|opencode` with the same workspace and task arguments. Review [[docs/adapters]] for the native controls and installed-version evidence. A missing CLI is reported before launch.
 
 For any IDE or unsupported CLI, `bundle MODE --agent generic --output /fresh/directory` emits a complete standalone instruction file. Choose a named agent to generate its discovery filename instead. Review/merge into the target project or attach the content to a session. A bundle does not install permissions or prove the client loaded it.
 
@@ -29,12 +29,12 @@ python3 scripts/setup.py
 python3 scripts/setup.py --apply
 ```
 
-The installer appends a marked shared-guidance section to each native global instruction file, adds Cursor's local user rule, exports five named Codex profiles, configures native permission defaults, and installs `~/.local/bin/oas`. It preserves explicit instructions outside the marked section. Claude's existing approval mode is retained, while bypass mode is disabled. Cursor's sandbox is enabled. Gemini gets sandboxed/default approvals. OpenCode allows local file operations and asks for other tools and external directories. Copilot's native default approvals are retained; its managed config file is not edited.
+The installer appends a marked shared-guidance section to each native global instruction file, adds Cursor's local user rule, exports five named Codex profiles, configures native permission defaults, and installs `~/.local/bin/oas`. It preserves explicit instructions outside the marked section. Claude's existing approval mode is retained, while bypass mode is disabled. Cursor's sandbox is enabled. OpenCode allows local file operations and asks for other tools and external directories. Copilot's native default approvals are retained; its managed config file is not edited.
 
 Existing files are backed up under `~/.local/state/owens-agent-system/backups/<run>/`, with a manifest recording which files were created and each original mode. Backups can contain private configuration, so keep them local. Re-running the installer updates the owned sections without duplication. It refuses unmanaged profile/executable collisions and symlink targets; ordinary partial write failures roll back.
 
 After setup, start a new agent session to load the global instructions. For explicit workflow and permission selection, use `oas run development --agent claude --workspace /path/to/worktree --task "Your task"`, or `codex --profile owen-research`. OpenCode is also supported through `--agent opencode`. A normal agent launch gets the shared global instructions and selects a workflow by the request; it does not automatically activate a named Codex mode profile.
 
-This installation does not authenticate new accounts or establish paid entitlements. Gemini/Copilot may require login at first launch. Existing model choices, credentials, plugins, hooks, and canonical skill installations remain in place. Cursor rules apply to Agent chat, not Tab completion or Bugbot.
+This installation does not authenticate new accounts or establish paid entitlements. Copilot may require login at first launch. Existing model choices, credentials, plugins, hooks, and canonical skill installations remain in place. Cursor rules apply to Agent chat, not Tab completion or Bugbot.
 
 To roll back, run `python3 scripts/setup.py --rollback ~/.local/state/owens-agent-system/backups/<run>` to preview, then add `--apply` to execute. It restores each backed-up original with its recorded mode and removes a file the installer created only if its current SHA-256 still matches the manifest's installed hash; otherwise it keeps the file and says so. The backup directory is never deleted. This installer does not uninstall CLI packages.

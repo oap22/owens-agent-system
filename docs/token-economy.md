@@ -39,7 +39,7 @@ The launcher exposes three options on `preview` and `run`: `--lead-effort`, `--w
 |---|---|---|
 | Claude Code | `--effort LEVEL` (documented levels `low` to `max`; the documented default is `high`) | `--agents` inline JSON defining `implementor` with `model`, `effort`, a tool allowlist, and `maxTurns`; the lead delegates by naming it |
 | Codex | `-c model_reasoning_effort=LEVEL` | Role layer `agents.implementor` from `config/agents/implementor.toml`; with `--worker-model` or `--worker-effort` the launcher writes an overlay under the workspace's ignored `.oas/roles/` and points the role at it |
-| Cursor, Gemini, Copilot, OpenCode | Not implemented; the options are refused | Same |
+| Cursor, Copilot, OpenCode | Not implemented; the options are refused | Same |
 
 Codex's effort values are advertised by the selected model and are not enumerated in its published schema; `codex doctor` with the same overrides validates a value before a real run. The Codex `[agents.<name>]` entry documents only `config_file`, `description`, and `nickname_candidates`, and the role file is described as a config layer, so `model` and `model_reasoning_effort` in that layer are a reasonable reading of the schema, not a documented guarantee. Confirm with `python3 scripts/oas.py doctor development` before relying on it.
 

@@ -17,7 +17,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 MODES = ('development', 'research', 'ops', 'tutor', 'unattended')
-AGENTS = ('codex', 'claude', 'cursor', 'gemini', 'copilot', 'opencode', 'generic')
+AGENTS = ('codex', 'claude', 'cursor', 'copilot', 'opencode', 'generic')
 SHARED_CHOICES = ('auto', 'always', 'never')
 DEFAULT_TASK = "Follow this workflow for the user's next request."
 MODEL_PATTERN = r'[A-Za-z0-9][A-Za-z0-9._:/-]*'   # aliases, full ids, provider/model, ollama tags
@@ -27,7 +27,6 @@ MANAGED_END = '<!-- owens-agent-system:end -->'
 GLOBAL_INSTRUCTIONS = {
     'codex': '.codex/AGENTS.md',
     'claude': '.claude/CLAUDE.md',
-    'gemini': '.gemini/GEMINI.md',
     'copilot': '.copilot/copilot-instructions.md',
     'opencode': '.config/opencode/AGENTS.md',
     'cursor': '.cursor/rules/owens-agent-system.mdc',
@@ -239,8 +238,6 @@ def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=
         elif mode != 'ops':
             args += ['--auto-review']
         return args + [message]
-    if agent == 'gemini':
-        return ['gemini', '--sandbox', '--approval-mode', 'plan' if mode == 'tutor' else 'default', *model_flag, '--prompt-interactive', message]
     if agent == 'opencode':
         return ['opencode', str(workspace), '--agent', 'plan' if mode == 'tutor' else 'build', *model_flag, '--prompt', message]
     args = ['copilot', '--mode', 'plan' if mode == 'tutor' else 'interactive', *model_flag]
@@ -387,7 +384,7 @@ def bundle(mode, agent, output, task, shared=True):
     folder = Path(output).expanduser()
     # Require a fresh destination: no existing project files can be replaced.
     folder.mkdir(parents=True, exist_ok=False)
-    name = {'codex':'AGENTS.md', 'claude':'CLAUDE.md', 'gemini':'GEMINI.md',
+    name = {'codex':'AGENTS.md', 'claude':'CLAUDE.md',
             'copilot':'.github/copilot-instructions.md', 'cursor':'.cursor/rules/owen-agent-system.mdc',
             'opencode':'AGENTS.md', 'generic':'AGENTS.md'}[agent]
     content = prompt(mode, task, shared)

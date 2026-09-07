@@ -8,7 +8,7 @@ Date: 2026-09-06.
 - Codex prompt discovery: all five modes returned success from `codex debug prompt-input`, and the assembled shared instructions and current task were present. No model task was executed.
 - Codex strict configuration diagnostics: all five profiles loaded and returned exit 0 with a proper terminal environment and network access. Existing optional MCP configuration warnings remain. `codex --version` reports 0.153.0 while `doctor` identifies a separate installed Homebrew runtime at 0.147.0; this version discrepancy is recorded, not treated as a single-version certification. The diagnostic sandbox summary is coarse and does not prove enforcement of every setting.
 - Claude Code 2.1.259 and Cursor Agent 2026.08.11-e8db854: native options inspected through installed help. No live model execution or OS sandbox enforcement test performed for these adapters.
-- Gemini CLI and Copilot CLI: official documentation checked; executables unavailable locally. Generated adapter arguments and bundles are covered by unit tests, not live end-to-end runs.
+- Gemini CLI (adapter since removed) and Copilot CLI: official documentation checked; executables unavailable locally. Generated adapter arguments and bundles are covered by unit tests, not live end-to-end runs.
 - Publication review: authored source files inspected; no source vault notes, credential files, account configuration, transcripts, or data exports included. No credential-pattern hits in the candidate files. No dedicated secret scanner was installed; pattern scanning is a heuristic rather than proof.
 
 This establishes a tested workflow/configuration kit. It does not establish optimal model performance, cross-vendor permission equivalence, successful external integrations, or desktop adoption. The evaluation scenario bank is ready to run; no comparative agent-quality results are claimed.
@@ -28,7 +28,7 @@ This establishes a tested workflow/configuration kit. It does not establish opti
 - Changes: `--shared auto|always|never` on `preview`, `run`, and `bundle`; the Claude adapter passes guidance through `--append-system-prompt` with the task as the final prompt; `task --scenario ID`; an advisory skill-routing drift warning in `check`; `setup.py --rollback`; `check` invariants raised explicitly instead of with `assert`; UTF-8 encoding on all text reads and writes.
 - `python3 scripts/oas.py check` and `python3 -O scripts/oas.py check`: passed.
 - `python3 -m unittest discover -s tests -v`: 61 tests passed.
-- Installed CLIs at this date: Codex 0.153.0, Claude Code 2.1.259, Cursor Agent 2026.08.11-e8db854, Gemini CLI 0.58.0, GitHub Copilot CLI 1.0.83, OpenCode 1.16.2. Launcher flags were checked against installed `--help` output. No live model run was performed.
+- Installed CLIs at this date: Codex 0.153.0, Claude Code 2.1.259, Cursor Agent 2026.08.11-e8db854, Gemini CLI 0.58.0 (adapter since removed), GitHub Copilot CLI 1.0.83, OpenCode 1.16.2. Launcher flags were checked against installed `--help` output. No live model run was performed.
 - The prompt reduction and the Claude placement are structural de-duplication and alignment with the native convention. No model-quality gain is claimed or measured.
 
 ## 2026-09-07 tutor and unattended launch fix
@@ -48,4 +48,4 @@ Each adapter was started once with the launcher's exact tutor-mode argv (open se
 | GitHub Copilot CLI 1.0.83 | Starts; shows its home screen |
 | OpenCode 1.16.2 | Starts; shows its session screen |
 
-No model turn was completed and no file was changed. Trust prompts are each CLI's own first-run behavior for a directory. Gemini remains unverified past login until Owen completes it.
+No model turn was completed and no file was changed. Trust prompts are each CLI's own first-run behavior for a directory. Gemini was never verified past login; Owen cancelled the Gemini CLI subscription on 2026-09-07 and the adapter, its bundle target, its global-instruction install, and its settings patch were removed. Files the installer had already placed under `~/.gemini` are no longer managed and can be deleted by hand.
