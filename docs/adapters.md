@@ -5,7 +5,7 @@ The shared system is portable. Permission enforcement and session management bel
 | Agent | Launch adapter | Instruction bundle | Permission mapping | Validation |
 |---|---|---|---|---|
 | Codex | `--agent codex` | `AGENTS.md` | Explicit TOML overrides; workspace sandbox, auto-review; tutor read-only | Strict config/runtime checks; see build report |
-| Claude Code | `--agent claude` | `CLAUDE.md` | `acceptEdits` for dev/research, `manual` for ops, `plan` for tutoring; bypass disabled in supplied settings; guidance via `--append-system-prompt`, task as the final prompt | Installed 2.1.259 help checked; no paid model run |
+| Claude Code | `--agent claude` | `CLAUDE.md` | `auto` for dev/research, `default` (shown as Manual) for ops, `plan` for tutoring; bypass disabled in supplied settings; guidance via `--append-system-prompt`, task as the final prompt | Current CLI must expose `auto`; local argument parsing and settings checked; no paid model run |
 | Cursor Agent | `--agent cursor` | `.cursor/rules/owen-agent-system.mdc` | Sandbox enabled; auto-review for dev/research; ask mode for tutoring | Installed 2026.08.11-e8db854 help checked; no model run |
 | GitHub Copilot CLI | `--agent copilot` | `.github/copilot-instructions.md` | Interactive approvals inherited; tutor plan with shell/write tools denied | Installed 1.0.83 help checked; no model run; no OS sandbox configured by adapter |
 | Any other agent | `bundle --agent generic` | `AGENTS.md` | Configure its own native controls | Prompt compatibility only |
@@ -27,6 +27,8 @@ Lead effort and the implementor role are wired for two adapters. Claude Code rec
 Agent switches should use the task contract and handoff artifact, not copy a whole private transcript. The next agent verifies current files and evidence rather than trusting the previous agent's completion claim. Specialist roles are native Codex definitions today; other agents can use the same role contracts through their own delegation facilities when authorized.
 
 All adapters inherit existing runtime configuration and credentials. Copilot allow-all/autopilot environment overrides are explicitly rejected, but project/global tool grants in any client still need inspection. Plan/ask modes can allow internal planning artifacts and tool-specific behavior; they are not an OS-level write barrier over arbitrary connectors.
+
+Claude `auto` is a classifier-backed permission mode, not the unrestricted `bypassPermissions` mode. Availability depends on the installed Claude Code version, plan, model, provider, and any organization policy. Development and research refuse model identifiers Anthropic explicitly documents as ineligible, including Haiku, Claude 3, Sonnet 4.5, and Opus 4.5; the UI marks its Haiku choice unavailable. This prevents a known silent downgrade, but cannot preflight every account- or provider-side eligibility decision. The client launch fails rather than falling back when it rejects the `auto` argument; upgrade the client or select an eligible model instead of using `acceptEdits` or bypassing checks.
 
 OpenCode now has a launch adapter (`--agent opencode`) and global guidance at `~/.config/opencode/AGENTS.md`. Development uses its built-in build agent; tutoring uses plan. Native permission defaults are applied by the local setup script, not by Codex TOML. Installed OpenCode 1.16.2 launch options and resolved configuration were checked during setup. No cross-provider model execution is implied.
 

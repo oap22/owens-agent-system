@@ -109,7 +109,8 @@ def permission_label(cmd, agent, mode):
     if agent == 'codex':
         return oas.config(mode)['sandbox_mode']
     if agent == 'claude':
-        return _value_after(cmd, '--permission-mode')
+        value = _value_after(cmd, '--permission-mode')
+        return 'manual' if value == 'default' else value
     if agent == 'copilot':
         return _value_after(cmd, '--mode')
     if agent == 'opencode':
@@ -173,7 +174,10 @@ class Launcher:
 
     def _model_rows(self):
         rows = [Row(INHERIT, 'your current default', None, None)]
-        rows += [Row(m, '', None, m) for m in (self._model_cache[1] if self._model_cache else [])]
+        for model in (self._model_cache[1] if self._model_cache else []):
+            incompatible = (self.agent == 'claude' and self.mode in ('development', 'research') and
+                            oas.claude_auto_model_known_ineligible(model))
+            rows.append(Row(model, '', 'auto unavailable' if incompatible else None, model))
         typed = TYPE_MODEL if self.model_entry is None else f'{TYPE_MODEL} {self.model_entry}▏'
         rows.append(Row(typed, '', None, TYPE_MODEL))
         return rows

@@ -40,6 +40,15 @@ IMPLEMENTOR_TOOLS = ['Read', 'Edit', 'Write', 'Grep', 'Glob', 'Bash']
 IMPLEMENTOR_MAX_TURNS = 30
 
 
+def claude_auto_model_known_ineligible(model):
+    """True only for model identifiers Anthropic explicitly excludes from auto mode."""
+    if model is None:
+        return False
+    normalized = model.lower().replace('_', '-').replace('.', '-')
+    return ('haiku' in normalized or normalized.startswith('claude-3-') or
+            re.search(r'(?:sonnet|opus)-4-5(?:-|$)', normalized) is not None)
+
+
 def read(path):
     return Path(path).read_text(encoding='utf-8')
 
@@ -199,6 +208,8 @@ def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=
     workspace = workspace_path(workspace)
     if model is not None and not re.fullmatch(MODEL_PATTERN, model):
         raise ValueError('Model must be a plain alias or model identifier')
+    if agent == 'claude' and mode in ('development', 'research') and claude_auto_model_known_ineligible(model):
+        raise ValueError(f'Claude auto mode is unavailable for model {model}; choose Fable, a supported Sonnet/Opus model, or inherit an eligible default')
     # Every native CLI takes the session model as a flag; None inherits the user's own default.
     model_flag = ['--model', model] if model else []
     include, _ = shared_decision(agent, shared, home)
@@ -221,7 +232,11 @@ def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=
             extra['agents'] = {IMPLEMENTOR: {'config_file': str(implementor_overlay(workspace, worker))}}
         return ['codex', '--strict-config', *overrides(mode, extra), *model_flag, '-C', str(workspace), message]
     if agent == 'claude':
-        native_mode = 'plan' if mode == 'tutor' else ('manual' if mode == 'ops' else 'acceptEdits')
+        # Claude's auto mode is the native low-friction counterpart to the
+        # auto-review modes used by Codex and Cursor. Keep operations on the
+        # ordinary prompt path and tutoring read-only; never substitute the
+        # unrestricted bypassPermissions mode.
+        native_mode = 'plan' if mode == 'tutor' else ('default' if mode == 'ops' else 'auto')
         # Guidance is system-level context for Claude Code; the raw task is the user turn.
         if task.lstrip().startswith('-'):
             raise ValueError('Claude receives the task as a positional prompt; it must not start with a dash')
