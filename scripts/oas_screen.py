@@ -89,7 +89,7 @@ class Rain:
                     glyph = column[y % len(column)]
                     level = 1.0 if offset == 0 else max(0.05, 1.0 - offset / trail)
                     if faint:
-                        level *= 0.5
+                        level *= 0.3
                     out.append((y, x, glyph, level))
         return out
 
@@ -184,7 +184,7 @@ def _safe_addstr(stdscr, y, x, text, attr=0):
 
 def _init_colors(plain):
     """256-color green ramp via init_pair only; never curses.init_color."""
-    names = ('head', 'bright', 'mid', 'dim', 'dark', 'red')
+    names = ('head', 'bright', 'mid', 'dim', 'dark', 'red', 'text', 'detail', 'muted')
     if plain or not curses.has_colors():
         # Pair 0 is the terminal default; init_pair with -1 would need use_default_colors first.
         return {name: 0 for name in names}
@@ -194,10 +194,11 @@ def _init_colors(plain):
     except curses.error:
         pass
     if curses.COLORS >= 256:
-        values = (15, 46, 40, 34, 22, 196)
+        # Rain uses the green ramp; panel text is white, details pale green, disabled gray.
+        values = (15, 46, 40, 34, 22, 196, 231, 120, 245)
     else:
-        values = (curses.COLOR_WHITE, curses.COLOR_GREEN, curses.COLOR_GREEN,
-                   curses.COLOR_GREEN, curses.COLOR_GREEN, curses.COLOR_RED)
+        values = (curses.COLOR_WHITE, curses.COLOR_GREEN, curses.COLOR_GREEN, curses.COLOR_GREEN,
+                  curses.COLOR_GREEN, curses.COLOR_RED, curses.COLOR_WHITE, curses.COLOR_GREEN, curses.COLOR_WHITE)
     for i, fg in enumerate(values, start=1):
         try:
             curses.init_pair(i, fg, -1)
@@ -237,8 +238,8 @@ def _draw_box(stdscr, y0, x0, width, height, title, attr):
             top = top[:2] + label + top[2 + len(label):]
     _safe_addstr(stdscr, y0, x0, top, attr)
     for i in range(1, height - 1):
-        _safe_addstr(stdscr, y0 + i, x0, '│', attr)
-        _safe_addstr(stdscr, y0 + i, x0 + width - 1, '│', attr)
+        # Panels are opaque foreground: blank the interior so rain never shows through.
+        _safe_addstr(stdscr, y0 + i, x0, '│' + ' ' * (width - 2) + '│', attr)
     bottom = '└' + '─' * (width - 2) + '┘'
     _safe_addstr(stdscr, y0 + height - 1, x0, bottom, attr)
 
@@ -258,15 +259,18 @@ def _draw_rows(stdscr, y0, x0, width, rows_data, cursor, colors, start=0):
         y = y0 + 1 + i - start
         marker = '▸ ' if i == cursor else '  '
         if row.disabled:
-            text_attr = _pair(colors, 'dark', 'dim')
+            text_attr = _pair(colors, 'muted')
         elif i == cursor:
-            text_attr = _pair(colors, 'head') | curses.A_BOLD
+            text_attr = _pair(colors, 'bright') | curses.A_REVERSE | curses.A_BOLD
         else:
-            text_attr = _pair(colors, 'dim')
+            text_attr = _pair(colors, 'text')
         right = row.disabled or row.detail or ''
-        right_attr = _pair(colors, 'dark') if row.disabled else _pair(colors, 'dim')
+        right_attr = _pair(colors, 'muted') if row.disabled else (text_attr if i == cursor else _pair(colors, 'detail'))
         reserve = len(right) + 1 if right else 0
         left = (marker + row.text)[:max(0, inner - reserve)]
+        if i == cursor and not row.disabled:
+            # The selected row is a full-width highlight bar.
+            _safe_addstr(stdscr, y, x0 + 1, ' ' * (width - 2), text_attr)
         _safe_addstr(stdscr, y, x0 + 2, left, text_attr)
         if right:
             rx = x0 + width - 2 - len(right)
@@ -278,7 +282,7 @@ def _draw_panel(stdscr, y0, x0, width, rows_data, cursor, title, footer, colors,
     shown = rows_data[start:end]
     content = max(len(shown), 1)
     height = content + 4
-    _draw_box(stdscr, y0, x0, width, height, title, _pair(colors, 'mid'))
+    _draw_box(stdscr, y0, x0, width, height, title, _pair(colors, 'bright') | curses.A_BOLD)
     if shown:
         _draw_rows(stdscr, y0, x0, width, shown, cursor, colors, start)
         if start > 0:
@@ -291,7 +295,7 @@ def _draw_panel(stdscr, y0, x0, width, rows_data, cursor, title, footer, colors,
         mx = x0 + max(0, (width - len(message)) // 2)
         _safe_addstr(stdscr, my, mx, message, _pair(colors, 'red'))
     footer_y = y0 + height - 2
-    _safe_addstr(stdscr, footer_y, x0 + 2, footer[:max(0, width - 4)], _pair(colors, 'dim'))
+    _safe_addstr(stdscr, footer_y, x0 + 2, footer[:max(0, width - 4)], _pair(colors, 'detail'))
     return height
 
 
@@ -307,10 +311,14 @@ def _draw_home(stdscr, launcher, colors, rows, cols):
     else:
         logo_rows = ["O W E N ' S   A G E N T S"]
     n = len(logo_rows)
-    ramp = (_pair(colors, 'head') | curses.A_BOLD, _pair(colors, 'bright') | curses.A_BOLD, _pair(colors, 'mid'))
+    ramp = (_pair(colors, 'head') | curses.A_BOLD, _pair(colors, 'text') | curses.A_BOLD, _pair(colors, 'bright') | curses.A_BOLD)
+    band = max(len(line) for line in logo_rows) + 6
+    bx = max(0, (cols - band) // 2)
     for i, line in enumerate(logo_rows):
         attr = ramp[min(len(ramp) - 1, i * len(ramp) // max(1, n))]
         x = max(0, (cols - len(line)) // 2)
+        # Blank a band behind the logo so it sits in front of the rain.
+        _safe_addstr(stdscr, 1 + i, bx, ' ' * band)
         _safe_addstr(stdscr, 1 + i, x, line, attr)
     panel_rows = launcher.rows()
     width, x = _panel_geometry(cols, len(panel_rows))
@@ -334,7 +342,7 @@ def _draw_task_screen(stdscr, launcher, colors, rows, cols):
     width, x = _panel_geometry(cols, 0)
     height = 7  # border, blank, field, blank, message, footer, border
     y = max(1, rows // 2 - height // 2)
-    _draw_box(stdscr, y, x, width, height, launcher.title(), _pair(colors, 'mid'))
+    _draw_box(stdscr, y, x, width, height, launcher.title(), _pair(colors, 'bright') | curses.A_BOLD)
     field_y = y + 2
     field_x = x + 2
     field_width = max(1, width - 4)
@@ -345,14 +353,14 @@ def _draw_task_screen(stdscr, launcher, colors, rows, cols):
         start = max(0, pos - field_width + 1)
         visible = visible[start:start + field_width]
         pos -= start
-    _safe_addstr(stdscr, field_y, field_x, visible, _pair(colors, 'bright'))
+    _safe_addstr(stdscr, field_y, field_x, visible, _pair(colors, 'text') | curses.A_BOLD)
     if pos <= len(visible) and pos < field_width:
         caret_ch = visible[pos] if pos < len(visible) else ' '
         _safe_addstr(stdscr, field_y, field_x + pos, caret_ch, curses.A_REVERSE)
     message = launcher.flash or launcher.error
     if message:
         _safe_addstr(stdscr, y + height - 3, field_x, message[:field_width], _pair(colors, 'red'))
-    _safe_addstr(stdscr, y + height - 2, field_x, launcher.footer()[:field_width], _pair(colors, 'dim'))
+    _safe_addstr(stdscr, y + height - 2, field_x, launcher.footer()[:field_width], _pair(colors, 'detail'))
 
 
 def _draw_screen(stdscr, launcher, rain, colors, rows, cols):

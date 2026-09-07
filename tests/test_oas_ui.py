@@ -741,3 +741,52 @@ class ReviewFixesTest(unittest.TestCase):
         notty = type('S', (), {'isatty': lambda self: False})()
         with patch.object(oas.sys, 'stdin', notty), patch.object(oas.sys, 'stdout', notty):
             self.assertEqual(oas.interactive_default([]), [])
+
+
+class OpaqueForegroundTest(unittest.TestCase):
+    """Panels and the logo band must fully cover the rain behind them."""
+
+    class FakeWindow:
+        def __init__(self, rows, cols):
+            self.rows, self.cols = rows, cols
+            self.grid = [[' '] * cols for _ in range(rows)]
+        def getmaxyx(self):
+            return self.rows, self.cols
+        def addstr(self, y, x, text, attr=0):
+            for i, ch in enumerate(text):
+                if 0 <= x + i < self.cols:
+                    self.grid[y][x + i] = ch
+
+    def render(self, *keys):
+        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+        home = Path(tmp.name); cwd = home / 'proj'; cwd.mkdir()
+        launcher = oas_ui.Launcher(home=home, scan_root=home / 'none', cwd=cwd, which=lambda n: '/bin/x')
+        for k in keys:
+            launcher.key(k)
+        win = self.FakeWindow(30, 90)
+        rain = oas_screen.Rain(90, 30, random.Random(1))
+        for _ in range(25):
+            rain.step()
+        with patch.object(oas_screen.curses, 'color_pair', lambda n: 0):
+            oas_screen._draw_screen(win, launcher, rain, {}, 30, 90)
+        return [''.join(r) for r in win.grid]
+
+    @staticmethod
+    def has_rain(text):
+        return any('ｱ' <= ch <= 'ﾝ' or ch.isdigit() for ch in text)
+
+    def test_panel_interior_and_logo_band_hide_rain(self):
+        for keys in ((), ('enter',), ('enter', 'enter')):
+            lines = self.render(*keys)
+            tops = [i for i, l in enumerate(lines) if '┌' in l]
+            self.assertEqual(len(tops), 1, keys)
+            top = tops[0]; bottom = next(i for i, l in enumerate(lines) if '└' in l)
+            left = lines[top].index('┌'); right = lines[top].index('┐')
+            for y in range(top, bottom + 1):
+                self.assertFalse(self.has_rain(lines[y][left:right + 1]), (keys, y, lines[y]))
+            if not keys:
+                logo_rows = [l for l in lines[1:11] if '█' in l]
+                self.assertEqual(len(logo_rows), 10)
+                for l in logo_rows:
+                    a = l.index('█'); b = l.rindex('█')
+                    self.assertFalse(self.has_rain(l[a - 3:b + 4]), l)
