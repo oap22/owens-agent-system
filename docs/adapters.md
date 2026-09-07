@@ -19,7 +19,7 @@ python3 scripts/oas.py run research --agent gemini --workspace /path/to/research
 python3 scripts/oas.py bundle ops --agent copilot --output /tmp/owen-copilot-ops
 ```
 
-The CLI checks whether the executable exists before launch. Older clients may reject a current flag; update or use the reviewed bundle, never remove permission controls merely to make a command start. For generic/IDE use, merge generated instructions with existing workspace guidance deliberately. Do not overwrite a repository's engineering instructions.
+`--model` maps to `--model` on every adapter (Codex `-m`, Claude alias or full name, Cursor, Gemini, Copilot, OpenCode `provider/model`); the value is validated as an identifier only, not against the account's entitlements. The CLI checks whether the executable exists before launch. Older clients may reject a current flag; update or use the reviewed bundle, never remove permission controls merely to make a command start. For generic/IDE use, merge generated instructions with existing workspace guidance deliberately. Do not overwrite a repository's engineering instructions.
 
 Unattended launch is implemented only for Codex's explicit no-escalation profile, and still requires an audit of inherited hooks and MCP tools. Other adapters refuse that combination. The unattended workflow can be exported as a bundle for a separately audited native automation. A universal no-prompt flag would not provide equivalent protections.
 

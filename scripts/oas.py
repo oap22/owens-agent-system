@@ -20,6 +20,7 @@ MODES = ('development', 'research', 'ops', 'tutor', 'unattended')
 AGENTS = ('codex', 'claude', 'cursor', 'gemini', 'copilot', 'opencode', 'generic')
 SHARED_CHOICES = ('auto', 'always', 'never')
 DEFAULT_TASK = "Follow this workflow for the user's next request."
+MODEL_PATTERN = r'[A-Za-z0-9][A-Za-z0-9._:/-]*'   # aliases, full ids, provider/model, ollama tags
 # Markers and native global instruction paths shared with scripts/setup.py.
 MANAGED_START = '<!-- owens-agent-system:start -->'
 MANAGED_END = '<!-- owens-agent-system:end -->'
@@ -195,8 +196,12 @@ def implementor_overlay(workspace, worker):
     return path
 
 
-def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=None, worker_model=None, worker_effort=None):
+def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=None, worker_model=None, worker_effort=None, model=None):
     workspace = workspace_path(workspace)
+    if model is not None and not re.fullmatch(MODEL_PATTERN, model):
+        raise ValueError('Model must be a plain alias or model identifier')
+    # Every native CLI takes the session model as a flag; None inherits the user's own default.
+    model_flag = ['--model', model] if model else []
     include, _ = shared_decision(agent, shared, home)
     # An empty task opens a session that waits for the user: Claude gets no initial
     # prompt, agents that need one get DEFAULT_TASK.
@@ -215,30 +220,30 @@ def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=
             extra['model_reasoning_effort'] = lead_effort
         if worker:
             extra['agents'] = {IMPLEMENTOR: {'config_file': str(implementor_overlay(workspace, worker))}}
-        return ['codex', '--strict-config', *overrides(mode, extra), '-C', str(workspace), message]
+        return ['codex', '--strict-config', *overrides(mode, extra), *model_flag, '-C', str(workspace), message]
     if agent == 'claude':
         native_mode = 'plan' if mode == 'tutor' else ('manual' if mode == 'ops' else 'acceptEdits')
         # Guidance is system-level context for Claude Code; the raw task is the user turn.
         if task.lstrip().startswith('-'):
             raise ValueError('Claude receives the task as a positional prompt; it must not start with a dash')
-        args = ['claude', '--settings', str(ROOT / 'adapters/claude/settings.json'), '--permission-mode', native_mode]
+        args = ['claude', '--settings', str(ROOT / 'adapters/claude/settings.json'), '--permission-mode', native_mode, *model_flag]
         if lead_effort:
             args += ['--effort', lead_effort]
         if worker:
             args += ['--agents', implementor_agent(worker)]
         return args + ['--append-system-prompt', guidance(mode, include)] + ([] if open_session else [task])
     if agent == 'cursor':
-        args = ['cursor-agent', '--workspace', str(workspace), '--sandbox', 'enabled']
+        args = ['cursor-agent', '--workspace', str(workspace), '--sandbox', 'enabled', *model_flag]
         if mode == 'tutor':
             args += ['--mode', 'ask']
         elif mode != 'ops':
             args += ['--auto-review']
         return args + [message]
     if agent == 'gemini':
-        return ['gemini', '--sandbox', '--approval-mode', 'plan' if mode == 'tutor' else 'default', '--prompt-interactive', message]
+        return ['gemini', '--sandbox', '--approval-mode', 'plan' if mode == 'tutor' else 'default', *model_flag, '--prompt-interactive', message]
     if agent == 'opencode':
-        return ['opencode', str(workspace), '--agent', 'plan' if mode == 'tutor' else 'build', '--prompt', message]
-    args = ['copilot', '--mode', 'plan' if mode == 'tutor' else 'interactive']
+        return ['opencode', str(workspace), '--agent', 'plan' if mode == 'tutor' else 'build', *model_flag, '--prompt', message]
+    args = ['copilot', '--mode', 'plan' if mode == 'tutor' else 'interactive', *model_flag]
     if mode == 'tutor':
         args += ['--deny-tool', 'write', '--deny-tool', 'shell']
     return args + ['--interactive', message]
@@ -445,6 +450,7 @@ def main(argv=None):
         p.add_argument('--workspace', required=True)
         p.add_argument('--task', required=True)
         p.add_argument('--shared', choices=SHARED_CHOICES, default='auto', help='Include shared prompts; auto omits them when the agent\'s global instructions carry them')
+        p.add_argument('--model', help='Session model alias or id for the agent; omit to inherit your current default')
         p.add_argument('--lead-effort', choices=EFFORTS, help='Reasoning effort for the lead session (codex and claude only)')
         p.add_argument('--worker-model', help='Model alias or identifier for the implementor role (codex and claude only)')
         p.add_argument('--worker-effort', choices=EFFORTS, help='Reasoning effort for the implementor role (codex and claude only)')
@@ -503,13 +509,13 @@ def main(argv=None):
         elif args.action == 'preview':
             workspace = workspace_path(args.workspace)
             cmd = command(args.agent, args.mode, workspace, args.task, args.shared,
-                          lead_effort=args.lead_effort, worker_model=args.worker_model, worker_effort=args.worker_effort)
+                          lead_effort=args.lead_effort, worker_model=args.worker_model, worker_effort=args.worker_effort, model=args.model)
             include, reason = shared_decision(args.agent, args.shared)
             print(f'shared guidance {"included" if include else "omitted"}: {reason}', file=sys.stderr)
             print(shlex.join(cmd))
         else:
             return launch(args.agent, args.mode, args.workspace, args.task, args.shared,
-                          lead_effort=args.lead_effort, worker_model=args.worker_model, worker_effort=args.worker_effort)
+                          lead_effort=args.lead_effort, worker_model=args.worker_model, worker_effort=args.worker_effort, model=args.model)
     except (ValueError, OSError) as exc:
         print(f'ERROR: {exc}', file=sys.stderr)
         return 2

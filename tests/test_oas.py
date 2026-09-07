@@ -457,3 +457,30 @@ class OASTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ModelFlagTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+
+    def test_every_adapter_passes_model_flag_and_none_inherits(self):
+        for agent in oas.AGENTS[:-1]:
+            mode = 'development'
+            cmd = oas.command(agent, mode, self.root, 'Task', shared='never', model='my-model')
+            self.assertEqual(cmd[cmd.index('--model') + 1], 'my-model', agent)
+            self.assertTrue(cmd[-1].endswith('Task'), agent)
+            self.assertNotIn('--model', oas.command(agent, mode, self.root, 'Task', shared='never'), agent)
+
+    def test_model_ids_validated(self):
+        for bad in ('', ' ', 'bad model', '-x', 'a;b', 'm$'):
+            with self.assertRaises(ValueError, msg=bad):
+                oas.command('codex', 'development', self.root, 'Task', shared='never', model=bad)
+        for good in ('opus', 'gpt-5.6-luna', 'openai/gpt-5.4', 'ollama/qwen3-coder:30b', 'claude-fable-5-1'):
+            oas.command('codex', 'development', self.root, 'Task', shared='never', model=good)
+
+    def test_cli_model_reaches_run_and_preview(self):
+        with patch.object(oas.shutil, 'which', return_value='/bin/codex'), patch.object(oas.subprocess, 'call', return_value=0) as call:
+            self.assertEqual(oas.main(['run', 'development', '--workspace', str(self.root), '--task', 'T', '--model', 'gpt-x']), 0)
+            argv = call.call_args.args[0]
+            self.assertEqual(argv[argv.index('--model') + 1], 'gpt-x')
