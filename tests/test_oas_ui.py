@@ -732,7 +732,7 @@ class OpaqueForegroundTest(unittest.TestCase):
             for y in range(top, bottom + 1):
                 self.assertFalse(self.has_rain(lines[y][left:right + 1]), (keys, y, lines[y]))
             if not keys:
-                logo_rows = [l for l in lines[1:6] if '█' in l]
+                logo_rows = [l for l in lines if '█' in l]
                 self.assertEqual(len(logo_rows), 5)
                 block = oas_screen.logo_lines("OWEN'S AGENTS")
                 self.assertEqual(len(block[0]), 70)
