@@ -27,8 +27,11 @@ Rules that keep the shape cheap:
 - Delegate by packet, never by conversation. The lead writes [[templates/task-packet]] and reads the report. Nothing else crosses the boundary. A subagent starts with a fresh context in both Claude Code and Codex, so anything not in the packet does not exist for it.
 - Delegate reading, not only writing. A slice that requires reading many files to change few is the best candidate: the bulk stays in the implementor's context and the lead receives a short report.
 - Do not delegate a dependent chain. If slice B needs the result of slice A, the lead does A and B, or one implementor does both in sequence. Parallel packets must own disjoint paths.
-- Escalate, do not loop. A packet carries a budget. An implementor that fails its check twice stops and reports. The lead then either fixes the packet or does the slice itself at higher effort. Never re-run the same packet a third time on the same worker.
-- Keep the lead's context stable. Shared guidance goes in the global instruction file (`setup.py --apply`), the workflow goes in the system prompt, the task comes last. This is the prefix order that prompt caching rewards and that `--shared auto` already produces.
+- Escalate, do not loop. A packet carries a budget. An implementor that fails its check twice stops and reports. The lead then climbs one rung: with `--worker-retry-effort` an `implementor-retry` role exists on the same cheap model at higher effort, and the lead re-sends the packet to it exactly once; without that rung, or after it fails, the lead fixes the packet or does the slice itself. Never re-run the same packet twice on the same rung. The middle rung is the "run cheap, re-run failures expensive" claim above applied inside one session: the lead redoing a slice at `high` on the strong model is the most expensive path, so it should be the last one.
+- Set the worker's effort explicitly. In Claude Code a subagent with no `effort` inherits the session's, so `--worker-model sonnet` alone runs the cheaper model at the lead's `high` or `xhigh`. The launcher passes whatever you give it; pair `--worker-model` with `--worker-effort`.
+- Keep the lead's context stable. Shared guidance goes in the global instruction file (`setup.py --apply`), the workflow goes in the system prompt, the task comes last. This is the prefix order that prompt caching rewards and that `--shared auto` already produces. Claude Code documents that switching model or effort mid-session, connecting or disconnecting MCP servers, denying whole tools, and compacting all invalidate the cached prefix. So "xhigh to frame, then `/effort high` to work" costs one uncached re-read of the whole prefix at the switch; on a long session that is usually still cheaper than staying at `xhigh`, on a short one it is not. Pick the effort at launch when the task is short.
+- Watch what every launch sends. `preview` prints an estimated token count for the guidance and the task, and `check` warns when any mode's guidance with shared prompts passes the budget in `scripts/oas.py` (`GUIDANCE_BUDGET_TOKENS`). The estimate is characters divided by four, not a tokenizer; it exists to catch drift in `prompts/` and `workflows/`, which are paid on every turn of every session, cached or not.
+- Cap tool output at the harness where it supports it. Claude Code documents a `bashOutputMaxChars` setting; its default was not checked here, so choose a value against the current docs before adding it to `adapters/claude/settings.json`. Until then the packet's "last ten lines" rule is the only cap on implementor output.
 - Prefer targeted reads. Entry points in a packet, not "explore the codebase". Tail check output, do not paste whole logs. Summarize at slice boundaries, not mid-slice.
 
 ## Harness mapping
@@ -37,8 +40,8 @@ The launcher exposes three options on `preview` and `run`: `--lead-effort`, `--w
 
 | Harness | Lead effort | Implementor |
 |---|---|---|
-| Claude Code | `--effort LEVEL` (documented levels `low` to `max`; the documented default is `high`) | `--agents` inline JSON defining `implementor` with `model`, `effort`, a tool allowlist, and `maxTurns`; the lead delegates by naming it |
-| Codex | `-c model_reasoning_effort=LEVEL` | Role layer `agents.implementor` from `config/agents/implementor.toml`; with `--worker-model` or `--worker-effort` the launcher writes an overlay under the workspace's ignored `.oas/roles/` and points the role at it |
+| Claude Code | `--effort LEVEL` (documented levels `low` to `max`; the documented default is `high`) | `--agents` inline JSON defining `implementor` with `model`, `effort`, a tool allowlist, and `maxTurns`; with `--worker-retry-effort` a second entry `implementor-retry` on the same model at that effort; the lead delegates by naming either |
+| Codex | `-c model_reasoning_effort=LEVEL` | Role layer `agents.implementor` from `config/agents/implementor.toml`; with `--worker-model` or `--worker-effort` the launcher writes an overlay under the workspace's ignored `.oas/roles/` and points the role at it; `--worker-retry-effort` writes a second layer and registers `agents.implementor-retry` with a description |
 | Cursor, Copilot, OpenCode | Not implemented; the options are refused | Same |
 
 Codex's effort values are advertised by the selected model and are not enumerated in its published schema; `codex doctor` with the same overrides validates a value before a real run. The Codex `[agents.<name>]` entry documents only `config_file`, `description`, and `nickname_candidates`, and the role file is described as a config layer, so `model` and `model_reasoning_effort` in that layer are a reasonable reading of the schema, not a documented guarantee. Confirm with `python3 scripts/oas.py doctor development` before relying on it.
@@ -50,5 +53,15 @@ Model identifiers are never written into this repository. `--worker-model` takes
 Cost per completed task, not per request. A cheaper worker that needs a second pass or a lead rewrite is not cheaper. For each candidate configuration record, per task: harness, lead model and effort, worker model and effort, number of packets, packets escalated, wall clock, token or dollar telemetry where the harness reports it (Claude Code reports session cost; `--max-budget-usd` caps print-mode runs and counts subagent spend), pass or fail against the task's acceptance criteria, and substantive corrections by Owen.
 
 Run the comparison on the same tasks with the lead model alone at `medium` and `high`. That is the baseline the split must beat. If the split loses on a task type, record that and stop delegating that type. Keep the log in an ignored `.oas/evals/` folder, per [[evals/README]].
+
+The launcher records and reads that log. After each task:
+
+```sh
+python3 scripts/oas.py log-run --output /path/to/project/.oas --task <id-or-title> --harness claude --mode development --result pass \
+  --lead-effort xhigh --worker-model sonnet --worker-effort low --retry-effort medium --packets 3 --escalated 1 --cost-usd 1.42 --minutes 18
+python3 scripts/oas.py report-runs --output /path/to/project/.oas
+```
+
+`log-run` appends one JSON line to `.oas/evals/runs.jsonl`. `--cost-usd` is the figure the harness reports (Claude Code shows session usage under `/usage`; `--max-budget-usd` counts subagent spend but only in print mode); omit it when unknown, and the record stores null rather than zero. `report-runs` groups runs by configuration (harness, lead model and effort, worker model and effort, retry rung) and prints cost per completed task: every dollar spent under that configuration, failed runs included, divided by the tasks it completed. A configuration with any uncosted run reports `unknown` rather than a flattering partial average. Packets escalated, and corrections by Owen, sit beside it so a cheap configuration that needs rescue is visible.
 
 Token counts alone do not decide. A configuration that saves tokens and gives back a correct answer is a regression. Critical boundary failures (lost work, false completion, unauthorized action) block promotion regardless of cost.
