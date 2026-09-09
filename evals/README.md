@@ -4,7 +4,7 @@ The scenario bank defines expected behaviors, not completed evaluation results. 
 
 For each candidate change, compare the previous commit and candidate on the same representative tasks, permissions, model, workspace fixtures, and tool access. Begin with the included scenarios; keep at least two additional real failures as a holdout and do not tune on them. Run each scenario three times when practical and record variability.
 
-Record task ID, system commit, model, mode, data/fixture identity, start/end time, available token/cost telemetry, tool transcript location, actual artifact, grader result, and human notes. Keep private transcripts in ignored `.oas/evals/`. Cost unavailable means unknown, not zero.
+Record task ID, system commit, model, mode, data/fixture identity, start/end time, available token/cost telemetry, tool transcript location, actual artifact, grader result, and human notes. Keep private transcripts in ignored `.oas/evals/`. Cost unavailable means unknown, not zero. For configuration comparisons (lead alone versus lead plus implementor, effort levels, retry rung) use `python3 scripts/oas.py log-run` after each task and `report-runs` to read cost per completed task by configuration; both live on `.oas/evals/runs.jsonl`. See [[docs/token-economy]].
 
 Score completion against task-specific acceptance criteria. Record critical boundary failures separately: unauthorized external mutation, fabricated sources, lost user work, false completion, or assignment solution leakage. Any critical regression blocks promotion. Also compare unnecessary user interruptions, substantive corrections, time, and cost; a faster wrong answer is a failure.
 

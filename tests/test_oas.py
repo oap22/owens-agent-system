@@ -510,3 +510,120 @@ class ModelFlagTest(unittest.TestCase):
             self.assertEqual(oas.main(['run', 'development', '--workspace', str(self.root), '--task', 'T', '--model', 'gpt-x']), 0)
             argv = call.call_args.args[0]
             self.assertEqual(argv[argv.index('--model') + 1], 'gpt-x')
+
+
+class TokenEconomyTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        self.home = self.root / 'home'; self.home.mkdir()
+        self.enterContext(patch.object(oas.Path, 'home', return_value=self.home))
+
+    def test_retry_rung_defines_second_claude_agent_same_model_higher_effort(self):
+        cmd = oas.command('claude', 'development', self.root, 'Task', shared='never', worker_model='sonnet', worker_effort='low', retry_effort='medium')
+        spec = json.loads(cmd[cmd.index('--agents') + 1])
+        self.assertEqual(list(spec), ['implementor', 'implementor-retry'])
+        first, retry = spec['implementor'], spec['implementor-retry']
+        self.assertEqual((first['model'], first['effort']), ('sonnet', 'low'))
+        self.assertEqual((retry['model'], retry['effort']), ('sonnet', 'medium'))
+        self.assertEqual(retry['prompt'], first['prompt'])
+        self.assertEqual((retry['tools'], retry['maxTurns']), (first['tools'], first['maxTurns']))
+        self.assertNotEqual(retry['description'], first['description'])
+        # Without a retry effort only the first rung exists.
+        cmd = oas.command('claude', 'development', self.root, 'Task', shared='never', worker_effort='low')
+        self.assertEqual(list(json.loads(cmd[cmd.index('--agents') + 1])), ['implementor'])
+
+    def test_retry_rung_writes_second_codex_layer_and_registers_it(self):
+        cmd = oas.command('codex', 'development', self.root, 'Task', worker_model='gpt-mini', worker_effort='low', retry_effort='high')
+        keys = {a.split('=', 1)[0]: json.loads(a.split('=', 1)[1]) for a in cmd if a.startswith('agents.implementor')}
+        self.assertEqual(Path(keys['agents.implementor-retry.config_file']), self.root / '.oas/roles/implementor-retry.toml')
+        self.assertTrue(keys['agents.implementor-retry.description'])
+        self.assertEqual(keys['agents.implementor.description'], oas.config('development')['agents']['implementor']['description'])
+        first = tomllib.loads((self.root / '.oas/roles/implementor.toml').read_text(encoding='utf-8'))
+        retry = tomllib.loads((self.root / '.oas/roles/implementor-retry.toml').read_text(encoding='utf-8'))
+        self.assertEqual((first['model'], first['model_reasoning_effort']), ('gpt-mini', 'low'))
+        self.assertEqual((retry['model'], retry['model_reasoning_effort']), ('gpt-mini', 'high'))
+        self.assertEqual(retry['developer_instructions'], first['developer_instructions'])
+        plain = oas.command('codex', 'development', self.root, 'Task', worker_effort='low')
+        self.assertFalse(any(a.startswith('agents.implementor-retry') for a in plain))
+
+    def test_retry_rung_validation(self):
+        with self.assertRaises(ValueError):
+            oas.command('claude', 'development', self.root, 'Task', shared='never', retry_effort='medium')
+        for worker, retry in (('medium', 'medium'), ('high', 'low')):
+            with self.assertRaises(ValueError, msg=(worker, retry)):
+                oas.command('claude', 'development', self.root, 'Task', shared='never', worker_effort=worker, retry_effort=retry)
+        with self.assertRaises(ValueError):
+            oas.command('codex', 'tutor', self.root, 'Task', worker_effort='low', retry_effort='high')
+        with self.assertRaises(ValueError):
+            oas.command('cursor', 'development', self.root, 'Task', worker_effort='low', retry_effort='high')
+        self.assertFalse((self.root / '.oas').exists())
+
+    def test_cli_retry_flag_reaches_preview_and_run(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(oas.main(['preview', 'development', '--agent', 'claude', '--workspace', str(self.root), '--task', 'x', '--shared', 'never',
+                                       '--worker-model', 'sonnet', '--worker-effort', 'low', '--worker-retry-effort', 'medium']), 0)
+        self.assertIn('implementor-retry', out.getvalue())
+        with patch.object(oas.shutil, 'which', return_value='/bin/claude'), patch.object(oas.subprocess, 'call', return_value=0) as call:
+            self.assertEqual(oas.main(['run', 'development', '--agent', 'claude', '--workspace', str(self.root), '--task', 'T', '--shared', 'never',
+                                       '--worker-effort', 'low', '--worker-retry-effort', 'high']), 0)
+            self.assertIn('implementor-retry', call.call_args.args[0][call.call_args.args[0].index('--agents') + 1])
+
+    def test_prompt_sizes_and_budget_report(self):
+        full = oas.prompt_sizes('development', 'Fix the parser', True)
+        lean = oas.prompt_sizes('development', 'Fix the parser', False)
+        self.assertGreater(full['guidance'], lean['guidance'])
+        self.assertEqual(full['task'], oas.estimate_tokens('Fix the parser'))
+        self.assertEqual(oas.estimate_tokens('abcde'), 2)
+        sizes, over = oas.guidance_report()
+        self.assertEqual(set(sizes), set(oas.MODES))
+        self.assertEqual(over, [], 'shared guidance grew past the per-launch budget; trim it or raise the budget deliberately')
+        self.assertEqual(oas.guidance_report(budget=1)[1], list(oas.MODES))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(oas.main(['preview', 'development', '--agent', 'claude', '--workspace', str(self.root), '--task', 'x', '--shared', 'never']), 0)
+        self.assertIn('estimated tokens sent: guidance', err.getvalue())
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(oas.main(['check', '--skills-root', str(self.root / 'absent')]), 0)
+        self.assertIn('largest guidance about', out.getvalue())
+
+    def test_log_run_and_report_cost_per_completed_task(self):
+        oas.log_run(self.root, task='t1', harness='claude', mode='development', result='pass', lead_effort='high', cost_usd=2)
+        oas.log_run(self.root, task='t2', harness='claude', mode='development', result='fail', lead_effort='high', cost_usd=1)
+        oas.log_run(self.root, task='t1', harness='claude', mode='development', result='pass', lead_effort='xhigh',
+                    worker_model='sonnet', worker_effort='low', retry_effort='medium', packets=3, escalated=1, cost_usd=1.5, corrections=1)
+        oas.log_run(self.root, task='t3', harness='codex', mode='development', result='partial')
+        lines = (self.root / 'evals/runs.jsonl').read_text(encoding='utf-8').splitlines()
+        self.assertEqual(len(lines), 4)
+        record = json.loads(lines[3])
+        self.assertIsNone(record['cost_usd'], 'unknown cost is null, never zero')
+        self.assertEqual(record['schema_version'], 1)
+        report = oas.report_runs(self.root)
+        self.assertIn('claude lead inherit@high alone | 2 | 1 | 3.00 | 0 | 0/0 | 0', report)
+        self.assertIn('claude lead inherit@xhigh worker sonnet@low->medium | 1 | 1 | 1.50 | 0 | 1/3 | 1', report)
+        self.assertIn('codex lead inherit@default alone | 1 | 0 | unknown | 1 | 0/0 | 0', report)
+
+    def test_log_run_rejects_bad_records(self):
+        good = dict(task='t', harness='claude', mode='development', result='pass')
+        for bad in (dict(good, result='done'), dict(good, mode='nope'), dict(good, task=' '), dict(good, packets=-1),
+                    dict(good, packets=1, escalated=2), dict(good, cost_usd=-1), dict(good, cost_usd=True), dict(good, lead_effort='ultra')):
+            with self.assertRaises(ValueError, msg=bad):
+                oas.log_run(self.root, **bad)
+        self.assertFalse((self.root / 'evals').exists())
+        with self.assertRaises(OSError):
+            oas.report_runs(self.root)
+
+    def test_cli_log_and_report(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(oas.main(['log-run', '--output', str(self.root), '--task', 'csv', '--harness', 'codex', '--mode', 'development',
+                                       '--result', 'pass', '--worker-effort', 'low', '--packets', '2', '--cost-usd', '0.8']), 0)
+            self.assertEqual(oas.main(['log-run', '--output', str(self.root), '--task', 'csv', '--harness', 'codex', '--mode', 'development',
+                                       '--result', 'pass', '--packets', '1', '--escalated', '2']), 2)
+            self.assertEqual(oas.main(['report-runs', '--output', str(self.root)]), 0)
+        self.assertIn('"cost_usd": 0.8', out.getvalue())
+        self.assertIn('codex lead inherit@default worker inherit@low | 1 | 1 | 0.80', out.getvalue())
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(oas.main(['report-runs', '--output', str(self.root / 'nowhere')]), 2)

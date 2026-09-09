@@ -22,7 +22,9 @@ For heavy work, run a strong lead at high effort and hand bulk slices to a cheap
 python3 scripts/oas.py run development --agent claude --workspace /absolute/path/to/project --task "Use the task contract in .oas/<id>/task.json" --lead-effort xhigh --worker-model sonnet --worker-effort low
 ```
 
-`--lead-effort` sets the lead session's reasoning effort; `--worker-model` and `--worker-effort` define the `implementor` role (a Claude Code subagent passed inline, or a Codex role layer written under the workspace's ignored `.oas/roles/`). Codex and Claude only; other adapters refuse the options. The lead delegates by task packet and verifies from diffs, per [[docs/token-economy]] and [[templates/task-packet]]. No model identifier is stored in this repository.
+`--lead-effort` sets the lead session's reasoning effort; `--worker-model` and `--worker-effort` define the `implementor` role (a Claude Code subagent passed inline, or a Codex role layer written under the workspace's ignored `.oas/roles/`). Set both: a Claude Code subagent with no effort of its own inherits the lead's. Add `--worker-retry-effort medium` to launch a second rung, `implementor-retry`, on the same cheap model at higher effort; the lead re-sends a failed packet to it once before taking the slice itself. Codex and Claude only; other adapters refuse the options. The lead delegates by task packet and verifies from diffs, per [[docs/token-economy]] and [[templates/task-packet]]. No model identifier is stored in this repository.
+
+`preview` also prints an estimated token count for the guidance and task it would send. After a task, `python3 scripts/oas.py log-run --output /path/.oas ...` records the configuration, result, and cost, and `report-runs` prints cost per completed task by configuration, which is the number that decides whether the split stays.
 
 `preview` prints the exact command and assembled instructions without starting an agent. `run` opens the selected agent in the target workspace with the same core instructions and its native permission controls. `--agent` defaults to `codex`; use `claude`, `cursor`, `copilot`, or `opencode` to switch. `--model ALIAS_OR_ID` picks the session model through the agent's native flag; omit it to inherit your current default. Both accept `--shared auto|always|never` (default `auto`): `auto` omits `prompts/core.md` and `prompts/owen.md` when the agent's global instruction file already contains the current managed block, `always` sends them regardless, and `never` omits them; the workflow and task are always sent. Existing account login, installed skills, and connectors remain available where that agent supports them. It does not overwrite your global configuration or project instructions. Choose a task worktree first for development; see [[workflows/development]].
 
@@ -62,7 +64,7 @@ Run bare `oas` on an interactive terminal, or `oas ui` explicitly, to pick mode,
 - `config/profiles/`: mode-specific settings; these are source layers, not legacy inline Codex profiles.
 - `prompts/`: concise shared guidance and a sanitized working profile.
 - `workflows/`: development, research, operations, tutoring, and unattended contracts.
-- `scripts/oas.py`: launcher, configuration checks, task creation, and evidence validation.
+- `scripts/oas.py`: launcher, configuration checks, task creation, evidence validation, and the run log (`log-run`, `report-runs`).
 - `evals/`: scenario bank and a measurable improvement protocol.
 - `docs/sources.md`: current primary sources, adoption decisions, and limits of the evidence.
 

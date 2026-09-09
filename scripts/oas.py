@@ -36,8 +36,15 @@ TASK_HEADER = '\n\n# Current user task\n\n'
 # Effort levels documented for Claude Code; Codex accepts whatever the selected model advertises.
 EFFORTS = ('low', 'medium', 'high', 'xhigh', 'max')
 IMPLEMENTOR = 'implementor'
+IMPLEMENTOR_RETRY = 'implementor-retry'
 IMPLEMENTOR_TOOLS = ['Read', 'Edit', 'Write', 'Grep', 'Glob', 'Bash']
 IMPLEMENTOR_MAX_TURNS = 30
+# Rough size accounting for what every launch sends; four characters per token is an
+# estimate, not a tokenizer. The budget is a warning threshold for prompt drift.
+CHARS_PER_TOKEN = 4
+GUIDANCE_BUDGET_TOKENS = 3500
+RUN_RESULTS = ('pass', 'fail', 'partial')
+RUN_LOG = 'evals/runs.jsonl'
 
 
 def claude_auto_model_known_ineligible(model):
@@ -150,6 +157,21 @@ def prompt(mode, task, shared=True):
     return guidance(mode, shared) + TASK_HEADER + task
 
 
+def estimate_tokens(text):
+    return -(-len(text) // CHARS_PER_TOKEN)
+
+
+def prompt_sizes(mode, task, shared=True):
+    """Estimated token counts for what a launch sends: guidance (system side) and the task."""
+    return dict(guidance=estimate_tokens(guidance(mode, shared)), task=estimate_tokens(task))
+
+
+def guidance_report(budget=GUIDANCE_BUDGET_TOKENS):
+    """(mode, estimated tokens with shared prompts) per mode plus the modes over BUDGET."""
+    sizes = {mode: estimate_tokens(guidance(mode, True)) for mode in MODES}
+    return sizes, [mode for mode, size in sizes.items() if size > budget]
+
+
 def workspace_path(value):
     try:
         path = Path(value).expanduser().resolve(strict=True)
@@ -165,31 +187,71 @@ def role(name):
     return tomllib.loads(read(ROOT / f'config/agents/{name}.toml'))
 
 
-def delegation(mode, lead_effort=None, worker_model=None, worker_effort=None):
-    """Validate lead/worker options; return (lead_effort, worker) where worker is a dict or None."""
-    for value in (lead_effort, worker_effort):
+def delegation(mode, lead_effort=None, worker_model=None, worker_effort=None, retry_effort=None):
+    """Validate lead/worker options; return (lead_effort, worker) where worker is a dict or None.
+
+    WORKER carries the implementor's model and effort. When RETRY_EFFORT is given it also carries
+    'retry': the effort of a second rung, same model, that the lead re-sends a failed packet to once
+    before taking the slice itself."""
+    for value in (lead_effort, worker_effort, retry_effort):
         if value is not None and value not in EFFORTS:
             raise ValueError(f'Effort must be one of {", ".join(EFFORTS)}')
     if worker_model is not None and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:-]*', worker_model):
         raise ValueError('Worker model must be a plain alias or model identifier')
-    worker = {k: v for k, v in (('model', worker_model), ('effort', worker_effort)) if v is not None}
+    if retry_effort is not None:
+        if worker_effort is None:
+            raise ValueError('--worker-retry-effort needs --worker-effort so the retry rung is above the first attempt')
+        if EFFORTS.index(retry_effort) <= EFFORTS.index(worker_effort):
+            raise ValueError(f'Retry effort {retry_effort} must be higher than worker effort {worker_effort}')
+    worker = {k: v for k, v in (('model', worker_model), ('effort', worker_effort), ('retry', retry_effort)) if v is not None}
     if worker and not config(mode).get('agents', {}).get('enabled', False):
         raise ValueError(f'{mode} disables delegation; worker options are not allowed')
     return lead_effort, worker or None
 
 
+def worker_rungs(worker):
+    """(role name, {model, effort}) per implementor rung: the first attempt and, when configured, the retry."""
+    worker = dict(worker or {})
+    retry = worker.pop('retry', None)
+    rungs = [(IMPLEMENTOR, worker)]
+    if retry is not None:
+        rungs.append((IMPLEMENTOR_RETRY, dict(worker, effort=retry)))
+    return rungs
+
+
+def rung_description(name):
+    base = config('development')['agents'][IMPLEMENTOR]['description']
+    if name == IMPLEMENTOR:
+        return base
+    return 'Second rung for one packet that failed on implementor: same role and model at higher effort. Use once per packet, then the lead takes the slice.'
+
+
 def implementor_agent(worker):
-    """Claude Code --agents JSON for the implementor, sharing the Codex role text."""
+    """Claude Code --agents JSON for the implementor rungs, sharing the Codex role text."""
     layer = role(IMPLEMENTOR)
-    spec = dict(description=config('development')['agents'][IMPLEMENTOR]['description'],
-                prompt=layer['developer_instructions'].strip(), tools=list(IMPLEMENTOR_TOOLS), maxTurns=IMPLEMENTOR_MAX_TURNS)
-    spec.update(worker or {})
-    return json.dumps({IMPLEMENTOR: spec}, ensure_ascii=False)
+    agents = {}
+    for name, options in worker_rungs(worker):
+        spec = dict(description=rung_description(name), prompt=layer['developer_instructions'].strip(),
+                    tools=list(IMPLEMENTOR_TOOLS), maxTurns=IMPLEMENTOR_MAX_TURNS)
+        spec.update(options)
+        agents[name] = spec
+    return json.dumps(agents, ensure_ascii=False)
 
 
-def implementor_overlay(workspace, worker):
+def implementor_overlays(workspace, worker):
+    """Codex [agents] overrides for every implementor rung, writing one role layer per rung."""
+    registered = config('development')['agents']
+    result = {}
+    for name, options in worker_rungs(worker):
+        result[name] = {'config_file': str(implementor_overlay(workspace, options, name))}
+        if name not in registered:
+            result[name]['description'] = rung_description(name)
+    return result
+
+
+def implementor_overlay(workspace, worker, name=IMPLEMENTOR):
     """Write the implementor role layer plus worker overrides under WORKSPACE/.oas/roles and return its path."""
-    path = Path(workspace) / '.oas/roles' / f'{IMPLEMENTOR}.toml'
+    path = Path(workspace) / '.oas/roles' / f'{name}.toml'
     if path.is_symlink() or (path.exists() and not path.is_file()):
         raise ValueError(f'{path} must be a regular file or absent')
     lines = [read(ROOT / f'config/agents/{IMPLEMENTOR}.toml').rstrip(), '# Launch-time worker overrides written by scripts/oas.py; regenerated on every launch.']
@@ -204,7 +266,7 @@ def implementor_overlay(workspace, worker):
     return path
 
 
-def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=None, worker_model=None, worker_effort=None, model=None):
+def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=None, worker_model=None, worker_effort=None, model=None, retry_effort=None):
     workspace = workspace_path(workspace)
     if model is not None and not re.fullmatch(MODEL_PATTERN, model):
         raise ValueError('Model must be a plain alias or model identifier')
@@ -217,7 +279,7 @@ def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=
     # prompt, agents that need one get DEFAULT_TASK.
     open_session = not task.strip()
     message = prompt(mode, DEFAULT_TASK if open_session else task, include)
-    lead_effort, worker = delegation(mode, lead_effort, worker_model, worker_effort)
+    lead_effort, worker = delegation(mode, lead_effort, worker_model, worker_effort, retry_effort)
     if agent not in AGENTS or agent == 'generic':
         raise ValueError('Generic agents use bundle, not run; select a native adapter')
     if mode == 'unattended' and agent != 'codex':
@@ -229,7 +291,7 @@ def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=
         if lead_effort:
             extra['model_reasoning_effort'] = lead_effort
         if worker:
-            extra['agents'] = {IMPLEMENTOR: {'config_file': str(implementor_overlay(workspace, worker))}}
+            extra['agents'] = implementor_overlays(workspace, worker)
         return ['codex', '--strict-config', *overrides(mode, extra), *model_flag, '-C', str(workspace), message]
     if agent == 'claude':
         # Claude's auto mode is the native low-friction counterpart to the
@@ -393,6 +455,88 @@ def validate_task(path):
     return errors
 
 
+def log_run(output, **fields):
+    """Append one run record to OUTPUT/evals/runs.jsonl and return the record.
+
+    A run is one task carried to a result under one configuration. Cost unknown is recorded as
+    null, never zero; the report divides total cost by completed tasks, so a cheap configuration
+    that needs a second pass is charged for both."""
+    if fields.get('result') not in RUN_RESULTS:
+        raise ValueError(f'result must be one of {", ".join(RUN_RESULTS)}')
+    for key in ('harness', 'mode', 'task'):
+        if not isinstance(fields.get(key), str) or not fields[key].strip():
+            raise ValueError(f'{key} is required')
+    if fields['mode'] not in MODES:
+        raise ValueError('Unknown mode')
+    for key in ('lead_effort', 'worker_effort', 'retry_effort'):
+        if fields.get(key) is not None and fields[key] not in EFFORTS:
+            raise ValueError(f'{key} must be one of {", ".join(EFFORTS)}')
+    for key in ('packets', 'escalated', 'corrections'):
+        value = fields.get(key, 0)
+        if type(value) is not int or value < 0:
+            raise ValueError(f'{key} must be a nonnegative integer')
+        fields[key] = value
+    for key in ('cost_usd', 'minutes'):
+        value = fields.get(key)
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0):
+            raise ValueError(f'{key} must be a nonnegative number or omitted when unknown')
+        fields[key] = None if value is None else float(value)
+    if fields['escalated'] > fields['packets']:
+        raise ValueError('escalated packets cannot exceed packets')
+    record = dict(schema_version=1, at=datetime.now(timezone.utc).isoformat(timespec='seconds'))
+    for key in ('task', 'harness', 'mode', 'lead_model', 'lead_effort', 'worker_model', 'worker_effort', 'retry_effort',
+                'packets', 'escalated', 'result', 'cost_usd', 'minutes', 'corrections', 'notes'):
+        record[key] = fields.get(key)
+    path = Path(output).expanduser().resolve() / RUN_LOG
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('a', encoding='utf-8') as f:
+        f.write(json.dumps(record, ensure_ascii=False) + '\n')
+    return record
+
+
+def configuration_key(record):
+    """The launch configuration a run was made under, as one comparable string."""
+    lead = f"{record.get('lead_model') or 'inherit'}@{record.get('lead_effort') or 'default'}"
+    if not record.get('worker_model') and not record.get('worker_effort'):
+        return f'{record["harness"]} lead {lead} alone'
+    worker = f"{record.get('worker_model') or 'inherit'}@{record.get('worker_effort') or 'default'}"
+    if record.get('retry_effort'):
+        worker += f"->{record['retry_effort']}"
+    return f'{record["harness"]} lead {lead} worker {worker}'
+
+
+def report_runs(output):
+    """Per configuration: runs, passes, cost per completed task, unknown-cost runs, packets escalated."""
+    path = Path(output).expanduser().resolve() / RUN_LOG
+    groups = {}
+    for line in read(path).splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        row = groups.setdefault(configuration_key(record), dict(runs=0, passes=0, cost=0.0, costed=0, unknown=0, packets=0, escalated=0, corrections=0))
+        row['runs'] += 1
+        row['passes'] += record.get('result') == 'pass'
+        if record.get('cost_usd') is None:
+            row['unknown'] += 1
+        else:
+            row['cost'] += record['cost_usd']
+            row['costed'] += 1
+        row['packets'] += record.get('packets') or 0
+        row['escalated'] += record.get('escalated') or 0
+        row['corrections'] += record.get('corrections') or 0
+    lines = ['configuration | runs | passes | usd per completed task | runs without cost | packets escalated | corrections']
+    for key, row in sorted(groups.items()):
+        # Cost per completed task: everything spent under the configuration, divided by the tasks it completed.
+        if row['unknown'] or not row['passes']:
+            per_pass = 'unknown'
+        else:
+            per_pass = f"{row['cost'] / row['passes']:.2f}"
+        lines.append(f"{key} | {row['runs']} | {row['passes']} | {per_pass} | {row['unknown']} | {row['escalated']}/{row['packets']} | {row['corrections']}")
+    if len(lines) == 1:
+        lines.append('no runs recorded')
+    return '\n'.join(lines)
+
+
 def bundle(mode, agent, output, task, shared=True):
     if agent not in AGENTS:
         raise ValueError('Unknown agent')
@@ -440,6 +584,11 @@ def check(skills_root=None):
     if IMPLEMENTOR not in config('development')['agents'] or not role(IMPLEMENTOR).get('developer_instructions', '').strip():
         raise ValueError('The implementor role must be registered with nonempty developer_instructions')
     json.loads(implementor_agent({'effort': 'low'}))
+    if set(json.loads(implementor_agent({'effort': 'low', 'retry': 'medium'}))) != {IMPLEMENTOR, IMPLEMENTOR_RETRY}:
+        raise ValueError('The implementor retry rung must render alongside the first rung')
+    sizes, over = guidance_report()
+    for mode in over:
+        print(f'WARNING: {mode} guidance with shared prompts is about {sizes[mode]} tokens, over the {GUIDANCE_BUDGET_TOKENS} budget; trim before every launch pays for it', file=sys.stderr)
     skills_root = Path.home() / 'Developer/active/skills/skills' if skills_root is None else Path(skills_root)
     if skills_root.is_dir():
         for name in sorted(routed_skills()):
@@ -447,7 +596,8 @@ def check(skills_root=None):
                 print(f'WARNING: routed skill `{name}` has no directory under {skills_root}', file=sys.stderr)
     else:
         print('skills repo not present; routing check skipped', file=sys.stderr)
-    print(f'PASS: {len(MODES)} profiles, {len(roles)} roles, {len(items)} evaluation scenarios')
+    largest = max(sizes.values())
+    print(f'PASS: {len(MODES)} profiles, {len(roles)} roles, {len(items)} evaluation scenarios; largest guidance about {largest} tokens')
 
 
 def main(argv=None):
@@ -466,6 +616,23 @@ def main(argv=None):
         p.add_argument('--lead-effort', choices=EFFORTS, help='Reasoning effort for the lead session (codex and claude only)')
         p.add_argument('--worker-model', help='Model alias or identifier for the implementor role (codex and claude only)')
         p.add_argument('--worker-effort', choices=EFFORTS, help='Reasoning effort for the implementor role (codex and claude only)')
+        p.add_argument('--worker-retry-effort', choices=EFFORTS, help='Define an implementor-retry rung at this higher effort, same model, for one re-send of a failed packet')
+    p = sub.add_parser('log-run', help='Append one completed-task run to OUTPUT/evals/runs.jsonl')
+    p.add_argument('--output', required=True, help='The .oas folder that holds evals/')
+    p.add_argument('--task', required=True, help='Task id or short title')
+    p.add_argument('--harness', required=True, help='claude, codex, cursor, ...')
+    p.add_argument('--mode', required=True, choices=MODES)
+    p.add_argument('--result', required=True, choices=RUN_RESULTS)
+    p.add_argument('--lead-model'); p.add_argument('--lead-effort', choices=EFFORTS)
+    p.add_argument('--worker-model'); p.add_argument('--worker-effort', choices=EFFORTS); p.add_argument('--retry-effort', choices=EFFORTS)
+    p.add_argument('--packets', type=int, default=0, help='Packets delegated')
+    p.add_argument('--escalated', type=int, default=0, help='Packets that hit their budget and came back to the lead or the retry rung')
+    p.add_argument('--cost-usd', type=float, help='Session cost as the harness reports it; omit when unknown')
+    p.add_argument('--minutes', type=float, help='Wall clock; omit when unknown')
+    p.add_argument('--corrections', type=int, default=0, help='Substantive corrections by Owen')
+    p.add_argument('--notes')
+    p = sub.add_parser('report-runs', help='Cost per completed task by configuration from OUTPUT/evals/runs.jsonl')
+    p.add_argument('--output', required=True, help='The .oas folder that holds evals/')
     p = sub.add_parser('doctor')
     p.add_argument('mode', choices=MODES)
     p = sub.add_parser('export', help='Export Codex settings without overwriting')
@@ -518,16 +685,29 @@ def main(argv=None):
                 sys.path.insert(0, str(_here))
             import oas_screen
             return oas_screen.run_ui(plain=args.plain)
+        elif args.action == 'log-run':
+            record = log_run(args.output, task=args.task, harness=args.harness, mode=args.mode, result=args.result,
+                             lead_model=args.lead_model, lead_effort=args.lead_effort, worker_model=args.worker_model,
+                             worker_effort=args.worker_effort, retry_effort=args.retry_effort, packets=args.packets,
+                             escalated=args.escalated, cost_usd=args.cost_usd, minutes=args.minutes,
+                             corrections=args.corrections, notes=args.notes)
+            print(json.dumps(record, ensure_ascii=False))
+        elif args.action == 'report-runs':
+            print(report_runs(args.output))
         elif args.action == 'preview':
             workspace = workspace_path(args.workspace)
             cmd = command(args.agent, args.mode, workspace, args.task, args.shared,
-                          lead_effort=args.lead_effort, worker_model=args.worker_model, worker_effort=args.worker_effort, model=args.model)
+                          lead_effort=args.lead_effort, worker_model=args.worker_model, worker_effort=args.worker_effort,
+                          model=args.model, retry_effort=args.worker_retry_effort)
             include, reason = shared_decision(args.agent, args.shared)
             print(f'shared guidance {"included" if include else "omitted"}: {reason}', file=sys.stderr)
+            sizes = prompt_sizes(args.mode, args.task or DEFAULT_TASK, include)
+            print(f'estimated tokens sent: guidance {sizes["guidance"]}, task {sizes["task"]} (characters/{CHARS_PER_TOKEN}; the harness adds its own system prompt and tools)', file=sys.stderr)
             print(shlex.join(cmd))
         else:
             return launch(args.agent, args.mode, args.workspace, args.task, args.shared,
-                          lead_effort=args.lead_effort, worker_model=args.worker_model, worker_effort=args.worker_effort, model=args.model)
+                          lead_effort=args.lead_effort, worker_model=args.worker_model, worker_effort=args.worker_effort,
+                          model=args.model, retry_effort=args.worker_retry_effort)
     except (ValueError, OSError) as exc:
         print(f'ERROR: {exc}', file=sys.stderr)
         return 2
