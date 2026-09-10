@@ -1,0 +1,73 @@
+{
+  "method": "Each sample was sent as --append-system-prompt to `claude -p 'Reply with exactly: OK' --output-format json`; measured_tokens is the sample call's total input tokens (input + cache_creation + cache_read) minus the same call with no appended prompt. The no-prompt baseline was identical on three runs and every sample was run twice with identical totals, so the deltas are exact for that tokenizer on that day.",
+  "measured_on": "2026-09-10",
+  "harness": "Claude Code CLI 2.1.267, print mode, model served: claude-sonnet-5",
+  "baseline_input_tokens": 42403,
+  "prose_chars_per_token_mean": 3.187,
+  "samples": [
+    {
+      "name": "guidance:development",
+      "kind": "prose",
+      "chars": 7848,
+      "measured_tokens": 2470,
+      "chars_per_token": 3.177,
+      "sha256_prefix": "a15513832044"
+    },
+    {
+      "name": "guidance:research",
+      "kind": "prose",
+      "chars": 6806,
+      "measured_tokens": 2139,
+      "chars_per_token": 3.182,
+      "sha256_prefix": "21498c1dacf9"
+    },
+    {
+      "name": "guidance:ops",
+      "kind": "prose",
+      "chars": 6730,
+      "measured_tokens": 2141,
+      "chars_per_token": 3.143,
+      "sha256_prefix": "eb31ff3acff8"
+    },
+    {
+      "name": "guidance:tutor",
+      "kind": "prose",
+      "chars": 5668,
+      "measured_tokens": 1771,
+      "chars_per_token": 3.2,
+      "sha256_prefix": "a55cc4270f1d"
+    },
+    {
+      "name": "guidance:unattended",
+      "kind": "prose",
+      "chars": 5991,
+      "measured_tokens": 1867,
+      "chars_per_token": 3.209,
+      "sha256_prefix": "e66e2ad7cebd"
+    },
+    {
+      "name": "core.md",
+      "kind": "prose",
+      "chars": 3458,
+      "measured_tokens": 1063,
+      "chars_per_token": 3.253,
+      "sha256_prefix": "e47bacab9839"
+    },
+    {
+      "name": "task-packet.md",
+      "kind": "prose",
+      "chars": 1942,
+      "measured_tokens": 618,
+      "chars_per_token": 3.142,
+      "sha256_prefix": "f41d6fc0f644"
+    },
+    {
+      "name": "oas.py[:12000]",
+      "kind": "code",
+      "chars": 12000,
+      "measured_tokens": 4866,
+      "chars_per_token": 2.466,
+      "sha256_prefix": "42345cf48716"
+    }
+  ]
+}

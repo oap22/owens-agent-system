@@ -5,6 +5,7 @@ import argparse
 import copy
 from datetime import datetime, timezone
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -39,10 +40,13 @@ IMPLEMENTOR = 'implementor'
 IMPLEMENTOR_RETRY = 'implementor-retry'
 IMPLEMENTOR_TOOLS = ['Read', 'Edit', 'Write', 'Grep', 'Glob', 'Bash']
 IMPLEMENTOR_MAX_TURNS = 30
-# Rough size accounting for what every launch sends; four characters per token is an
-# estimate, not a tokenizer. The budget is a warning threshold for prompt drift.
-CHARS_PER_TOKEN = 4
+# Rough size accounting for what every launch sends. CHARS_PER_TOKEN is calibrated against
+# the real tokenizer on this kit's own prose (evals/token-calibration.json: 3.14-3.25 on
+# every prompt, workflow, and template sample; Python source tokenizes denser, about 2.5).
+# It is an estimate, not a tokenizer. The budget is a warning threshold for prompt drift.
+CHARS_PER_TOKEN = 3.2
 GUIDANCE_BUDGET_TOKENS = 3500
+TOKEN_CALIBRATION = 'evals/token-calibration.json'
 RUN_RESULTS = ('pass', 'fail', 'partial')
 RUN_LOG = 'evals/runs.jsonl'
 
@@ -158,7 +162,7 @@ def prompt(mode, task, shared=True):
 
 
 def estimate_tokens(text):
-    return -(-len(text) // CHARS_PER_TOKEN)
+    return math.ceil(len(text) / CHARS_PER_TOKEN)
 
 
 def prompt_sizes(mode, task, shared=True):
