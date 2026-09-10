@@ -576,6 +576,14 @@ class TokenEconomyTest(unittest.TestCase):
         self.assertGreater(full['guidance'], lean['guidance'])
         self.assertEqual(full['task'], oas.estimate_tokens('Fix the parser'))
         self.assertEqual(oas.estimate_tokens('abcde'), 2)
+        # The estimator must stay within a tenth of what the real tokenizer charged for this
+        # kit's own prose (evals/token-calibration.json); re-measure before changing the constant.
+        calibration = json.loads(oas.read(oas.ROOT / oas.TOKEN_CALIBRATION))
+        prose = [s for s in calibration['samples'] if s['kind'] == 'prose']
+        self.assertGreaterEqual(len(prose), 5)
+        for sample in prose:
+            estimate = oas.estimate_tokens('x' * sample['chars'])
+            self.assertLess(abs(estimate - sample['measured_tokens']) / sample['measured_tokens'], 0.10, sample['name'])
         sizes, over = oas.guidance_report()
         self.assertEqual(set(sizes), set(oas.MODES))
         self.assertEqual(over, [], 'shared guidance grew past the per-launch budget; trim it or raise the budget deliberately')
