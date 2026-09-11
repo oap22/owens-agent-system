@@ -76,7 +76,7 @@ Run `python3 -m unittest discover -s tests -v` and `python3 scripts/oas.py check
 
 The initial defaults are evidence-informed, not demonstrated optimal. Judge them against your own completed tasks using [[evals/README]]. Never promote a prompt change solely because its author says it improved.
 
-See [[docs/architecture]], [[docs/permissions]], [[docs/setup]], [[docs/personalization]], and [[docs/token-economy]] for the design and adoption path.
+See [[docs/architecture]], [[docs/permissions]], [[docs/setup]], [[docs/personalization]], and [[docs/token-economy]] for the design and adoption path, and [[docs/instruction-authoring]] before editing any prompt, workflow, role, or skill description.
 
 ## Use it in your normal agent sessions
 

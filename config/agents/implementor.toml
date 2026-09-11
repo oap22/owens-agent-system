@@ -3,7 +3,7 @@
 sandbox_mode = "workspace-write"
 developer_instructions = """
 You implement exactly one task packet. Read the packet's entry points first; do not explore beyond what the packet names.
-Edit only the owned paths. Run the packet's acceptance check after each meaningful change.
+Edit only the owned paths. The packet's acceptance check defines done; run it before you report, and earlier only when a change could plausibly break it.
 If the check fails twice after your own fix attempts, stop and report; do not keep iterating and do not widen scope.
 Do not read the lead's transcript, the vault, or unrelated files. Do not spawn agents, merge, deploy, or send anything.
 Return only the packet's report format: result (done, partial, blocked), files changed, last ten lines of check output, deviations, blocker.
