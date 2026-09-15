@@ -50,7 +50,7 @@ def refuse_symlink(home, target, relative):
         raise ValueError(f'Refusing symlink target: {relative}')
 
 
-def plan(home, source):
+def plan(home, source, runtimes=None):
     home, source = Path(home).resolve(), Path(source).resolve()
     src = oas if source == ROOT else load_oas(source)
     guidance = '\n\n'.join((source / f).read_text(encoding='utf-8') for f in src.SHARED_PROMPTS)
@@ -84,14 +84,39 @@ def plan(home, source):
     patches = {
         '.claude/settings.json': {'permissions': {'disableBypassPermissionsMode':'disable'}},
         '.cursor/cli-config.json': {'sandbox': {'mode':'enabled'},'approvalMode':'allowlist'},
-        '.config/opencode/opencode.json': {'permission':{'*':'ask','read':'allow','glob':'allow','grep':'allow','list':'allow','edit':'allow','external_directory':'ask','doom_loop':'ask'}},
+        '.config/opencode/opencode.json': {
+            'permission':{'*':'ask','read':'allow','glob':'allow','grep':'allow','list':'allow','edit':'allow','external_directory':'ask','doom_loop':'ask'},
+            'compaction':{'auto':True},
+        },
     }
     for relative, patch in patches.items():
         def update(old, patch=patch):
             base = json.loads(old) if old.strip() else {}
             return json.dumps(merged(base, patch), indent=2) + '\n'
         add(relative, update)
-    wrapper = '#!/bin/sh\n# Owen agent system launcher\nexec ' + shlex.quote(sys.executable) + ' ' + shlex.quote(str(source / 'scripts/oas.py')) + ' "$@"\n'
+    # Remember explicit runtime choices across subsequent installer runs.
+    wrapper_path = home / '.local/bin/oas'
+    refuse_symlink(home, wrapper_path, '.local/bin/oas')
+    selected = {}
+    if wrapper_path.is_file():
+        for line in wrapper_path.read_text(encoding='utf-8').splitlines():
+            if line.startswith('# OAS runtimes: '):
+                selected = json.loads(line.removeprefix('# OAS runtimes: '))
+    if not isinstance(selected, dict):
+        raise ValueError('Invalid OAS runtime selections in launcher')
+    selected.update(runtimes or {})
+    wrapper = '#!/bin/sh\n# Owen agent system launcher\n'
+    if selected:
+        wrapper += '# OAS runtimes: ' + json.dumps(selected, sort_keys=True) + '\n'
+    for agent, value in sorted(selected.items()):
+        if agent not in src.GLOBAL_INSTRUCTIONS or not isinstance(value, str):
+            raise ValueError('Invalid OAS runtime selection')
+        binary = Path(value).expanduser()
+        if not binary.is_absolute() or not binary.is_file() or not os.access(binary, os.X_OK):
+            raise ValueError(f'Runtime must be an absolute executable file: {agent}')
+        variable = f'OAS_{agent.upper()}_BIN'
+        wrapper += f'if [ -z "${{{variable}:-}}" ]; then export {variable}={shlex.quote(str(binary))}; fi\n'
+    wrapper += 'exec ' + shlex.quote(sys.executable) + ' ' + shlex.quote(str(source / 'scripts/oas.py')) + ' "$@"\n'
     def launcher(old):
         if old and '# Owen agent system launcher\n' not in old:
             raise ValueError('Refusing to replace an unmanaged oas executable')
@@ -113,6 +138,7 @@ def write_atomic(target, data, mode):
 def apply(changes, home):
     home = Path(home).resolve()
     for target, before, _, _ in changes:
+        refuse_symlink(home, target, target.relative_to(home))
         if (target.read_bytes() if target.exists() else None) != before:
             raise ValueError(f'File changed since planning: {target.name}')
     if not changes:
@@ -132,6 +158,7 @@ def apply(changes, home):
     done = []
     try:
         for (target,before,after,executable), record in zip(changes,records):
+            refuse_symlink(home, target, target.relative_to(home))
             if (target.read_bytes() if target.exists() else None) != before:
                 raise ValueError(f'Concurrent change: {target.name}')
             target.parent.mkdir(parents=True,exist_ok=True)
@@ -160,11 +187,13 @@ def rollback_plan(home, backup):
         refuse_symlink(home, target, rel)
         if not target.exists():
             actions.append(('absent', target, None))
+        elif hashlib.sha256(target.read_bytes()).hexdigest() != record['installed_sha256']:
+            actions.append(('keep', target, None))
         elif record['existed']:
             saved = backup / rel
             if not saved.is_file():
                 raise ValueError(f'Backup copy missing: {rel}')
-            actions.append(('restore', target, (saved.read_bytes(), record['mode'])))
+            actions.append(('restore', target, (saved.read_bytes(), record['mode'], record['installed_sha256'])))
         elif hashlib.sha256(target.read_bytes()).hexdigest() == record['installed_sha256']:
             actions.append(('remove', target, record['installed_sha256']))
         else:
@@ -175,9 +204,20 @@ def rollback_plan(home, backup):
 def rollback_apply(actions):
     """Execute a rollback plan. The backup directory is left in place. Returns counts per action."""
     counts = {action: 0 for action in LABELS}
+    # Check the entire plan before making the first change, including restored files.
+    for action, target, payload in actions:
+        if action not in ('restore', 'remove'):
+            continue
+        if target.is_symlink() or any(p.is_symlink() for p in target.parents):
+            raise ValueError(f'Refusing symlink target: {target}')
+        expected = payload[2] if action == 'restore' else payload
+        if not target.is_file() or hashlib.sha256(target.read_bytes()).hexdigest() != expected:
+            raise ValueError(f'File changed since planning: {target.name}')
     for action, target, payload in actions:
         if action == 'restore':
-            data, mode = payload
+            data, mode, expected = payload
+            if target.is_symlink() or hashlib.sha256(target.read_bytes()).hexdigest() != expected:
+                raise ValueError(f'File changed since planning: {target.name}')
             target.parent.mkdir(parents=True, exist_ok=True)
             write_atomic(target, data, mode)
         elif action == 'remove':
@@ -193,6 +233,8 @@ def main():
     parser.add_argument('--home',type=Path,default=Path.home())
     parser.add_argument('--source',type=Path,default=ROOT)
     parser.add_argument('--apply',action='store_true')
+    parser.add_argument('--codex-bin', help='Pin the OAS launcher to this installed Codex executable')
+    parser.add_argument('--claude-bin', help='Pin the OAS launcher to this installed Claude executable')
     parser.add_argument('--rollback',type=Path,metavar='BACKUP_DIR',help='preview (or with --apply, perform) a rollback from this backup directory instead of installing')
     args=parser.parse_args()
     home=args.home.resolve()
@@ -207,7 +249,8 @@ def main():
         return
     if args.apply and home == Path.home().resolve() and (args.source / '.git').is_file():
         parser.error('Install from the permanent checkout, not a linked worktree; use --source to select it')
-    changes=plan(home,args.source)
+    runtimes = {agent: value for agent, value in (('codex', args.codex_bin), ('claude', args.claude_bin)) if value}
+    changes=plan(home,args.source,runtimes)
     for path,_,_,_ in changes: print(path.relative_to(home))
     print(f'{len(changes)} files to update')
     if args.apply:

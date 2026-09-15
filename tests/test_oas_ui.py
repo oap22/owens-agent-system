@@ -877,7 +877,8 @@ class ModelChoicesTest(unittest.TestCase):
         self.assertEqual(oas_ui.parse_models('codex', 'not json'), [])
 
     def test_model_choices_static_and_failure_paths(self):
-        self.assertEqual(oas_ui.model_choices('claude'), ['fable', 'opus', 'sonnet', 'haiku'])
+        self.assertEqual(oas_ui.model_choices('claude')[:3], ['claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5'])
+        self.assertIn('fable', oas_ui.model_choices('claude'))
         self.assertEqual(oas_ui.model_choices('nonesuch'), [])
         ran = []
         class R:

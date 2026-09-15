@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -54,6 +55,17 @@ class SetupTest(unittest.TestCase):
 
     def test_merge_keeps_other_settings(self):
         self.assertEqual(m.merged({'permissions':{'allow':['Read']},'model':'mine'},{'permissions':{'disableBypassPermissionsMode':'disable'}}),{'permissions':{'allow':['Read'],'disableBypassPermissionsMode':'disable'},'model':'mine'})
+
+    def test_opencode_setup_enables_auto_compaction_and_preserves_siblings(self):
+        p = self.home / '.config/opencode/opencode.json'
+        p.parent.mkdir(parents=True)
+        p.write_text(json.dumps({'compaction': {'auto': False, 'reserved': 12000}, 'model': 'mine'}))
+        changes = m.plan(self.home, self.source)
+        after = next(after for target, _, after, _ in changes if target == p)
+        data = json.loads(after)
+        self.assertTrue(data['compaction']['auto'])
+        self.assertEqual(data['compaction']['reserved'], 12000)
+        self.assertEqual(data['model'], 'mine')
 
     def test_markers_and_paths_come_from_oas(self):
         self.assertEqual((m.START,m.END),(m.oas.MANAGED_START,m.oas.MANAGED_END))
@@ -126,5 +138,33 @@ class SetupTest(unittest.TestCase):
         p=self.home/'.codex/AGENTS.md';p.write_text('changed after planning',encoding='utf-8')
         with self.assertRaises(ValueError):m.rollback_apply(actions)
         self.assertEqual(p.read_text(encoding='utf-8'),'changed after planning')
+
+    def test_rollback_preserves_modified_preexisting_file(self):
+        p, backup = self.install()
+        p.write_text('new personal rules', encoding='utf-8')
+        actions = m.rollback_plan(self.home, backup)
+        self.assertEqual([a for a, t, _ in actions if t == p], ['keep'])
+        m.rollback_apply(actions)
+        self.assertEqual(p.read_text(encoding='utf-8'), 'new personal rules')
+
+    def test_restore_checks_all_files_before_mutating(self):
+        p, backup = self.install()
+        actions = m.rollback_plan(self.home, backup)
+        p.write_text('concurrent rules', encoding='utf-8')
+        before = self.snapshot()
+        with self.assertRaises(ValueError):
+            m.rollback_apply(actions)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_installer_keeps_explicit_runtime_selection(self):
+        binary = self.home / 'Codex with spaces'
+        binary.write_text('#!/bin/sh\nexit 0\n', encoding='utf-8'); binary.chmod(0o700)
+        changes = m.plan(self.home, self.source, {'codex': str(binary)})
+        m.apply(changes, self.home)
+        wrapper = self.home / '.local/bin/oas'
+        text = wrapper.read_text(encoding='utf-8')
+        self.assertIn('OAS_CODEX_BIN', text)
+        self.assertEqual(subprocess.run(['sh', '-n', str(wrapper)], capture_output=True).returncode, 0)
+        self.assertEqual(m.plan(self.home, self.source), [])
 
 if __name__=='__main__':unittest.main()

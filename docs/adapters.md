@@ -35,3 +35,7 @@ OpenCode now has a launch adapter (`--agent opencode`) and global guidance at `~
 The local setup also installs global guidance for all five agents. Installed versions in the table were checked through each CLI's `--help` output; authentication and an actual task remain separate checks, and no live model run was performed for any adapter.
 
 After setup, `preview` and `run` default to `--shared auto`: when the target agent's global instruction file already holds the current managed block, the launcher omits `prompts/core.md` and `prompts/owen.md` and sends only the workflow and task. `--shared always` restores the full prompt; `--shared never` omits the shared files even without an installed block. `bundle` defaults to `always` because bundles usually target another machine.
+
+## Context compaction
+
+OAS does not disable native automatic compaction. Claude receives the explicit `--autocompact auto` launch setting, and setup enables OpenCode's `compaction.auto` while preserving sibling settings. Codex, Cursor, and Copilot use their native model-aware defaults because they do not expose an equivalent portable launch flag. OAS does not overwrite a target project's OpenCode or Cursor configuration or set Codex's absolute token limit. Manual commands, checkpoint requirements, current sources, and provider limits are recorded in [[docs/compaction]].

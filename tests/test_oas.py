@@ -109,9 +109,26 @@ class OASTest(unittest.TestCase):
         for agent in oas.AGENTS[:-1]:
             cmd = oas.command(agent, 'research', self.root, 'Question')
             self.assertIn('Frame → Work → Prove → Hand off', ' '.join(cmd))
+            self.assertIn('automatic context compaction as lossy working-memory compression', ' '.join(cmd))
             self.assertTrue(cmd[-1].endswith('Question'))
             self.assertNotIn('--yolo', cmd)
             self.assertNotIn('--allow-all', cmd)
+
+    def test_claude_native_autocompact_is_explicit(self):
+        for mode in ('development', 'research', 'ops', 'tutor'):
+            cmd = oas.command('claude', mode, self.root, 'Task')
+            self.assertEqual(cmd.count('--autocompact'), 1, mode)
+            self.assertEqual(cmd[cmd.index('--autocompact') + 1], 'auto', mode)
+
+    def test_every_workflow_defines_compaction_continuity(self):
+        for mode in oas.MODES:
+            workflow = (oas.ROOT / f'workflows/{mode}.md').read_text(encoding='utf-8').lower()
+            self.assertIn('compact', workflow, mode)
+            self.assertTrue('checkpoint' in workflow or 'retrieval' in workflow, mode)
+
+    def test_compaction_scenarios_cover_every_mode(self):
+        covered = {item['mode'] for item in oas.scenarios() if item['id'].startswith('compact-')}
+        self.assertEqual(covered, set(oas.MODES))
 
     def test_native_tutor_controls(self):
         self.assertIn('plan', oas.command('claude', 'tutor', self.root, 'Teach me'))
@@ -178,7 +195,28 @@ class OASTest(unittest.TestCase):
     def test_initial_task_valid_not_complete(self):
         p = self.task()
         self.assertEqual(oas.validate_task(p), [])
-        self.assertEqual(json.loads(p.read_text())['status'], 'planned')
+        data = json.loads(p.read_text())
+        self.assertEqual((data['schema_version'], data['status']), (2, 'planned'))
+        self.assertEqual(data['checkpoint'], {
+            'phase': 'frame', 'completed': [], 'blockers': [], 'next_action': 'Confirm scope and begin',
+            'commit': None, 'worktree': None, 'owned_files': [], 'changed_files': [], 'evidence_paths': [],
+            'reverify': [], 'cursor': None, 'iteration': 0, 'retries_used': 0,
+        })
+
+    def test_version_two_checkpoint_fields_are_required_and_version_one_stays_readable(self):
+        p = self.task()
+        original = json.loads(p.read_text())
+        for field in ('phase', 'next_action', 'completed', 'owned_files', 'changed_files', 'evidence_paths',
+                      'reverify', 'commit', 'worktree', 'cursor', 'iteration', 'retries_used'):
+            data = json.loads(json.dumps(original))
+            del data['checkpoint'][field]
+            p.write_text(json.dumps(data))
+            self.assertTrue(oas.validate_task(p), field)
+        legacy = json.loads(json.dumps(original))
+        legacy['schema_version'] = 1
+        legacy['checkpoint'] = {k: legacy['checkpoint'][k] for k in ('completed', 'blockers', 'next_action', 'commit')}
+        p.write_text(json.dumps(legacy))
+        self.assertEqual(oas.validate_task(p), [])
 
     def test_complete_requires_all_evidence(self):
         p = self.task()
@@ -210,6 +248,31 @@ class OASTest(unittest.TestCase):
         p.write_text(json.dumps(data))
         self.assertTrue(oas.validate_task(p))
         data.update(authorized_actions=['Write local report'], writable_scope=['reports/'], budget={'max_minutes':10,'max_iterations':2})
+        p.write_text(json.dumps(data))
+        self.assertEqual(oas.validate_task(p), [])
+
+    def test_unattended_continuity_cannot_exceed_contract(self):
+        p = self.task(); data = json.loads(p.read_text())
+        data.update(mode='unattended', status='active', authorized_actions=['Write local report'],
+                    writable_scope=['reports/'], budget={'max_minutes': 10, 'max_iterations': 2}, retry_limit=1)
+        data['checkpoint'].update(iteration=3, retries_used=2)
+        p.write_text(json.dumps(data))
+        errors = oas.validate_task(p)
+        self.assertIn('Checkpoint retries exceed retry limit', errors)
+        self.assertIn('Checkpoint iteration exceeds task budget', errors)
+        data['schema_version'] = 1
+        data['checkpoint'] = {k: data['checkpoint'][k] for k in ('completed', 'blockers', 'next_action', 'commit')}
+        p.write_text(json.dumps(data))
+        self.assertIn('Active unattended task requires schema version 2 continuity state', oas.validate_task(p))
+
+    def test_checkpoint_evidence_must_be_local_and_present(self):
+        p = self.task(); data = json.loads(p.read_text())
+        for evidence in ('../outside.txt', '/absolute.txt', 'missing.txt'):
+            data['checkpoint']['evidence_paths'] = [evidence]
+            p.write_text(json.dumps(data))
+            self.assertTrue(oas.validate_task(p), evidence)
+        (p.parent / 'result.txt').write_text('current evidence')
+        data['checkpoint']['evidence_paths'] = ['result.txt']
         p.write_text(json.dumps(data))
         self.assertEqual(oas.validate_task(p), [])
 
@@ -438,18 +501,22 @@ class OASTest(unittest.TestCase):
         self.assertEqual(len(keys), 1)
         self.assertEqual(sum(a.startswith('model_reasoning_effort=') for a in oas.command('codex', 'development', self.root, 'T', lead_effort='low')), 1)
         path = Path(json.loads(keys[0].split('=', 1)[1]))
-        self.assertEqual(path, self.root / '.oas/roles/implementor.toml')
+        self.assertEqual(path.parent, self.root / '.oas/roles')
+        original = path.read_bytes()
         layer = tomllib.loads(path.read_text(encoding='utf-8'))
         self.assertEqual((layer['model'], layer['model_reasoning_effort'], layer['sandbox_mode']), ('gpt-mini', 'low', 'workspace-write'))
         self.assertEqual(layer['developer_instructions'], oas.role('implementor')['developer_instructions'])
         oas.command('codex', 'development', self.root, 'Task', worker_effort='medium')
-        layer = tomllib.loads(path.read_text(encoding='utf-8'))
+        other = oas.implementor_overlay(self.root, {'effort': 'medium'})
+        self.assertNotEqual(path, other)
+        self.assertEqual(path.read_bytes(), original)
+        layer = tomllib.loads(other.read_text(encoding='utf-8'))
         self.assertNotIn('model', layer); self.assertEqual(layer['model_reasoning_effort'], 'medium')
         plain = [a for a in oas.command('codex', 'development', self.root, 'Task') if a.startswith('agents.implementor.config_file=')]
         self.assertEqual(plain, [f'agents.implementor.config_file={oas.toml_value(str(oas.ROOT / "config/agents/implementor.toml"))}'])
         path.unlink(); path.symlink_to(self.root / 'elsewhere')
         with self.assertRaises(ValueError):
-            oas.command('codex', 'development', self.root, 'Task', worker_effort='low')
+            oas.command('codex', 'development', self.root, 'Task', worker_model='gpt-mini', worker_effort='low')
 
     def test_delegation_refused_where_unsupported(self):
         for agent in ('cursor', 'copilot', 'opencode'):
@@ -513,6 +580,68 @@ class ModelFlagTest(unittest.TestCase):
 
 
 class TokenEconomyTest(unittest.TestCase):
+    def test_preview_does_not_write_and_doctor_uses_launch_options(self):
+        args = ['development', '--workspace', str(self.root), '--model', 'gpt-6-astra',
+                '--lead-effort', 'high', '--worker-model', 'gpt-5.6-luna',
+                '--worker-effort', 'low', '--worker-retry-effort', 'medium']
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(oas.main(['preview', *args, '--task', 'Fix it']), 0)
+        self.assertFalse((self.root / '.oas').exists())
+        with patch.object(oas.shutil, 'which', return_value='/bin/codex'), patch.object(oas.subprocess, 'call', return_value=0) as call:
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(oas.main(['doctor', *args]), 0)
+        cmd = call.call_args.args[0]
+        self.assertEqual(cmd[-2:], ['doctor', '--summary'])
+        self.assertEqual(cmd[cmd.index('--model') + 1], 'gpt-6-astra')
+        self.assertIn('model_reasoning_effort="high"', cmd)
+        self.assertEqual(call.call_args.kwargs['cwd'], self.root)
+        self.assertEqual(len(list((self.root / '.oas/roles').glob('*.toml'))), 2)
+
+    def test_role_snapshots_parallel_and_parent_symlinks(self):
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            paths = list(pool.map(lambda effort: oas.implementor_overlay(self.root, {'effort': effort}),
+                                  ['low', 'medium', 'low', 'high']))
+        self.assertEqual(paths[0], paths[2])
+        self.assertEqual(len(set(paths)), 3)
+        for path, effort in zip(paths, ['low', 'medium', 'low', 'high']):
+            self.assertEqual(tomllib.loads(path.read_text(encoding='utf-8'))['model_reasoning_effort'], effort)
+        workspace = self.root / 'other'; workspace.mkdir()
+        (workspace / '.oas').symlink_to(self.root / '.oas')
+        with self.assertRaisesRegex(ValueError, 'symlink'):
+            oas.implementor_overlay(workspace, {'effort': 'low'})
+
+    def test_runtime_selection_is_explicit_and_invalid_choice_fails(self):
+        binary = self.root / 'custom codex'
+        binary.write_text('#!/bin/sh\nexit 0\n', encoding='utf-8'); binary.chmod(0o700)
+        with patch.dict(oas.os.environ, {'OAS_CODEX_BIN': str(binary)}):
+            self.assertEqual(oas.launch_command('codex', 'development', self.root, 'Task')[0], str(binary))
+        with patch.dict(oas.os.environ, {'OAS_CODEX_BIN': '/missing/oas-codex'}):
+            with self.assertRaisesRegex(ValueError, 'OAS_CODEX_BIN'):
+                oas.launch_command('codex', 'development', self.root, 'Task')
+
+    def test_cost_groups_modes_cohorts_and_unique_completed_tasks(self):
+        base = dict(task='same', harness='claude', mode='development', result='pass', cost_usd=2)
+        for _ in range(2):
+            oas.log_run(self.root, **base)
+        oas.log_run(self.root, **dict(base, mode='research'))
+        oas.log_run(self.root, **dict(base, cohort='new-suite', runtime_version='2.1.266'))
+        report = oas.report_runs(self.root)
+        self.assertIn('development / unspecified / claude lead inherit@default alone | 2 | 1 | 4.00', report)
+        self.assertIn('research / unspecified / claude', report)
+        self.assertIn('development / new-suite / claude 2.1.266', report)
+        for value in (float('nan'), float('inf'), -float('inf')):
+            for key in ('cost_usd', 'minutes'):
+                with self.assertRaises(ValueError):
+                    oas.log_run(self.root, **dict(base, **{key: value}))
+
+    def test_malformed_checkpoint_returns_errors_instead_of_crashing(self):
+        path = oas.new_task('development', self.root, 'Fix it', ['Regression passes']) / 'task.json'
+        record = json.loads(path.read_text(encoding='utf-8'))
+        for value in (None, 5, False, 'evidence.txt'):
+            record['checkpoint']['evidence_paths'] = value
+            path.write_text(json.dumps(record), encoding='utf-8')
+            self.assertIn('Checkpoint evidence_paths must be a string list', oas.validate_task(path))
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
@@ -536,11 +665,11 @@ class TokenEconomyTest(unittest.TestCase):
     def test_retry_rung_writes_second_codex_layer_and_registers_it(self):
         cmd = oas.command('codex', 'development', self.root, 'Task', worker_model='gpt-mini', worker_effort='low', retry_effort='high')
         keys = {a.split('=', 1)[0]: json.loads(a.split('=', 1)[1]) for a in cmd if a.startswith('agents.implementor')}
-        self.assertEqual(Path(keys['agents.implementor-retry.config_file']), self.root / '.oas/roles/implementor-retry.toml')
+        self.assertEqual(Path(keys['agents.implementor-retry.config_file']).parent, self.root / '.oas/roles')
         self.assertTrue(keys['agents.implementor-retry.description'])
         self.assertEqual(keys['agents.implementor.description'], oas.config('development')['agents']['implementor']['description'])
-        first = tomllib.loads((self.root / '.oas/roles/implementor.toml').read_text(encoding='utf-8'))
-        retry = tomllib.loads((self.root / '.oas/roles/implementor-retry.toml').read_text(encoding='utf-8'))
+        first = tomllib.loads(Path(keys['agents.implementor.config_file']).read_text(encoding='utf-8'))
+        retry = tomllib.loads(Path(keys['agents.implementor-retry.config_file']).read_text(encoding='utf-8'))
         self.assertEqual((first['model'], first['model_reasoning_effort']), ('gpt-mini', 'low'))
         self.assertEqual((retry['model'], retry['model_reasoning_effort']), ('gpt-mini', 'high'))
         self.assertEqual(retry['developer_instructions'], first['developer_instructions'])

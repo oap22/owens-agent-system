@@ -28,7 +28,8 @@ SCREENS = ('mode', 'agent', 'model', 'workspace', 'browser')
 INHERIT = 'inherit'
 TYPE_MODEL = 'type a model id…'
 ENTRY_FOOTER = '⏎ use  esc cancel'
-STATIC_MODELS = {'claude': ['fable', 'opus', 'sonnet', 'haiku'], 'copilot': ['auto']}
+# Documented identifiers are choices, not a claim about account access. Aliases remain available.
+STATIC_MODELS = {'claude': ['claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5', 'fable', 'opus', 'sonnet', 'haiku'], 'copilot': ['auto']}
 LIST_COMMANDS = {'codex': ['codex', 'debug', 'models'], 'cursor': ['cursor-agent', '--list-models'], 'opencode': ['opencode', 'models']}
 LIST_FOOTER = '↑↓ move  ⏎ select  ⌫ back  q quit'
 WORKSPACE_FOOTER = '↑↓ move  ⏎ launch  ⌫ back  q quit'
@@ -99,8 +100,8 @@ def model_choices(agent, run=None):
         return []
     run = run or subprocess.run
     try:
-        result = run(cmd, capture_output=True, text=True, timeout=8)
-    except (OSError, subprocess.SubprocessError):
+        result = run([oas.executable(agent), *cmd[1:]], capture_output=True, text=True, timeout=8)
+    except (ValueError, OSError, subprocess.SubprocessError):
         return []
     return parse_models(agent, result.stdout) if result.returncode == 0 else []
 
@@ -166,7 +167,12 @@ class Launcher:
                 rows.append(Row(agent, '', 'codex only', agent))
                 continue
             cmd = oas.command(agent, self.mode, self.cwd, 'placeholder', shared='never')
-            if not self._which(cmd[0]):
+            try:
+                selected = oas.executable(agent, self.environ)
+            except ValueError:
+                rows.append(Row(agent, '', 'invalid runtime path', agent))
+                continue
+            if not self._which(selected):
                 rows.append(Row(agent, '', 'not installed', agent))
             else:
                 rows.append(Row(agent, permission_label(cmd, agent, self.mode), None, agent))
