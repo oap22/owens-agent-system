@@ -1,13 +1,13 @@
 # Task packet
 
-The lead writes one packet per delegated slice. The implementor receives only this packet plus the workspace; it never receives the lead's transcript, the full task record, or the vault. Keep it under roughly forty lines. If the packet needs more, the slice is not independent enough to delegate.
+The lead writes one packet per delegated slice. Use a fresh worker context containing this packet and the required workspace instructions. Select the host's no-history option when available; do not assume its default spawn behavior. Keep it under roughly forty lines. If the packet needs more, the slice is not independent enough to delegate.
 
 ## Packet (lead → implementor)
 
 - Slice: one sentence naming the observable behavior to produce.
 - Owned paths: exact files or module the implementor may edit. Everything else is read-only.
 - Entry points: the two to five files or symbols to read first. Do not say "explore the codebase".
-- Acceptance check: the exact command whose passing output proves the slice, and the failing output it currently produces.
+- Acceptance check: the required observable behavior, the exact check command, and any known failing output.
 - Constraints: interfaces that must not change, style or dependency rules, anything another slice depends on.
 - Budget: maximum turns or iterations and the stop rule (for example: two failing runs of the check, then stop and report).
 - Return format: the report shape below, nothing else.
@@ -16,7 +16,7 @@ The lead writes one packet per delegated slice. The implementor receives only th
 
 - Result: done, partial, or blocked.
 - Files changed: paths only.
-- Check output: the last ten lines of the acceptance command, verbatim.
+- Check output: command, exit code, relevant final lines, and a path to the complete log; include any failure hidden above the tail.
 - Deviations: any edit outside owned paths, any interface change, any assumption made.
 - Blocker: the single missing thing, if blocked.
 

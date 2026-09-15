@@ -1,4 +1,7 @@
+import contextlib
 import importlib.util
+import io
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -52,8 +55,73 @@ class SetupTest(unittest.TestCase):
         self.assertEqual(p.read_text(),'original')
         self.assertFalse((self.home/'.claude/CLAUDE.md').exists())
 
+    def test_failed_cli_install_preserves_concurrent_edits_during_recovery(self):
+        for existed in (False, True):
+            for replacement in ('text', 'symlink', 'absent', 'mode'):
+                with self.subTest(existed=existed, replacement=replacement):
+                    home = self.home / f'{existed}-{replacement}'
+                    home.mkdir()
+                    first = home / '.codex/AGENTS.md'
+                    first.parent.mkdir()
+                    if existed:
+                        first.write_text('original personal instructions')
+                    external = home / 'user-file'
+                    external.write_text('concurrent edit')
+                    real_write = m.write_atomic
+                    calls = 0
+                    installed_first = None
+                    def fail_third(target, data, mode):
+                        nonlocal calls, installed_first
+                        calls += 1
+                        if calls == 3:
+                            installed_first = first.read_bytes()
+                            if replacement == 'text':
+                                first.write_text('concurrent edit')
+                            elif replacement == 'mode':
+                                first.chmod(0o400)
+                            else:
+                                first.unlink()
+                                if replacement == 'symlink':
+                                    first.symlink_to(external)
+                            raise OSError('simulated third-file failure')
+                        return real_write(target, data, mode)
+                    errors = io.StringIO()
+                    with patch.object(sys, 'argv', ['setup.py', '--home', str(home), '--apply']), \
+                         patch.object(m, 'write_atomic', side_effect=fail_third), \
+                         contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(errors):
+                        with self.assertRaisesRegex(OSError, 'third-file failure'):
+                            m.main()
+                    if replacement == 'absent':
+                        self.assertFalse(first.exists())
+                    elif replacement == 'mode':
+                        self.assertTrue(first.exists())
+                        self.assertEqual(first.read_bytes(), installed_first)
+                        self.assertEqual(m.stat.S_IMODE(first.stat().st_mode), 0o400)
+                    else:
+                        self.assertEqual(first.read_text(), 'concurrent edit')
+                        self.assertEqual(first.is_symlink(), replacement == 'symlink')
+                    self.assertEqual(external.read_text(), 'concurrent edit')
+                    self.assertFalse((home / '.claude/CLAUDE.md').exists(), 'untouched writes must still recover')
+                    backups = list((home / '.local/state/owens-agent-system/backups').iterdir())
+                    self.assertEqual(len(backups), 1)
+                    if existed:
+                        self.assertEqual((backups[0] / '.codex/AGENTS.md').read_text(), 'original personal instructions')
+                    self.assertIn(str(backups[0]), errors.getvalue())
+                    self.assertIn(str(first), errors.getvalue())
+
     def test_merge_keeps_other_settings(self):
         self.assertEqual(m.merged({'permissions':{'allow':['Read']},'model':'mine'},{'permissions':{'disableBypassPermissionsMode':'disable'}}),{'permissions':{'allow':['Read'],'disableBypassPermissionsMode':'disable'},'model':'mine'})
+
+    def test_opencode_setup_enables_auto_compaction_and_preserves_siblings(self):
+        p = self.home / '.config/opencode/opencode.json'
+        p.parent.mkdir(parents=True)
+        p.write_text(json.dumps({'compaction': {'auto': False, 'reserved': 12000}, 'model': 'mine'}))
+        changes = m.plan(self.home, self.source)
+        after = next(after for target, _, after, _ in changes if target == p)
+        data = json.loads(after)
+        self.assertTrue(data['compaction']['auto'])
+        self.assertEqual(data['compaction']['reserved'], 12000)
+        self.assertEqual(data['model'], 'mine')
 
     def test_markers_and_paths_come_from_oas(self):
         self.assertEqual((m.START,m.END),(m.oas.MANAGED_START,m.oas.MANAGED_END))
@@ -126,5 +194,67 @@ class SetupTest(unittest.TestCase):
         p=self.home/'.codex/AGENTS.md';p.write_text('changed after planning',encoding='utf-8')
         with self.assertRaises(ValueError):m.rollback_apply(actions)
         self.assertEqual(p.read_text(encoding='utf-8'),'changed after planning')
+
+    def test_rollback_preserves_modified_preexisting_file(self):
+        p, backup = self.install()
+        p.write_text('new personal rules', encoding='utf-8')
+        actions = m.rollback_plan(self.home, backup)
+        self.assertEqual([a for a, t, _ in actions if t == p], ['keep'])
+        m.rollback_apply(actions)
+        self.assertEqual(p.read_text(encoding='utf-8'), 'new personal rules')
+
+    def test_restore_checks_all_files_before_mutating(self):
+        p, backup = self.install()
+        actions = m.rollback_plan(self.home, backup)
+        p.write_text('concurrent rules', encoding='utf-8')
+        before = self.snapshot()
+        with self.assertRaises(ValueError):
+            m.rollback_apply(actions)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_rollback_keeps_permission_edits_to_original_and_created_files(self):
+        original, backup = self.install()
+        created = self.home / '.codex/AGENTS.md'
+        for target in (original, created):
+            target.chmod(0o400)
+        before = {target: target.read_bytes() for target in (original, created)}
+        actions = m.rollback_plan(self.home, backup)
+        self.assertEqual([a for a, t, _ in actions if t in before], ['keep', 'keep'])
+        m.rollback_apply(actions)
+        for target, data in before.items():
+            self.assertEqual(target.read_bytes(), data)
+            self.assertEqual(m.stat.S_IMODE(target.stat().st_mode), 0o400)
+
+    def test_rollback_refuses_permission_edit_after_planning(self):
+        original, backup = self.install()
+        actions = m.rollback_plan(self.home, backup)
+        original.chmod(0o400)
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, 'changed since planning'):
+            m.rollback_apply(actions)
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(m.stat.S_IMODE(original.stat().st_mode), 0o400)
+
+    def test_legacy_rollback_manifest_without_installed_mode(self):
+        original, backup = self.install()
+        manifest = backup / 'manifest.json'
+        records = json.loads(manifest.read_text())
+        for record in records:
+            record.pop('installed_mode', None)
+        manifest.write_text(json.dumps(records))
+        m.rollback_apply(m.rollback_plan(self.home, backup))
+        self.assertEqual(original.read_text(), 'My instructions')
+        self.assertEqual(m.stat.S_IMODE(original.stat().st_mode), 0o640)
+
+    def test_installer_keeps_explicit_runtime_selection(self):
+        binary = self.home / 'Codex with spaces'
+        binary.write_text('#!/bin/sh\nexit 0\n', encoding='utf-8'); binary.chmod(0o700)
+        changes = m.plan(self.home, self.source, {'codex': str(binary)})
+        m.apply(changes, self.home)
+        wrapper = self.home / '.local/bin/oas'
+        text = wrapper.read_text(encoding='utf-8')
+        self.assertIn('OAS_CODEX_BIN', text)
+        self.assertEqual(subprocess.run(['sh', '-n', str(wrapper)], capture_output=True).returncode, 0)
+        self.assertEqual(m.plan(self.home, self.source), [])
 
 if __name__=='__main__':unittest.main()
