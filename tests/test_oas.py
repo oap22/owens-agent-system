@@ -629,11 +629,23 @@ class TokenEconomyTest(unittest.TestCase):
         report = oas.report_runs(self.root)
         self.assertIn('development / unspecified / claude lead inherit@default alone | 2 | 1 | 4.00', report)
         self.assertIn('research / unspecified / claude', report)
-        self.assertIn('development / new-suite / claude 2.1.266', report)
+        self.assertIn('development / new-suite / claude [runtime 2.1.266]', report)
         for value in (float('nan'), float('inf'), -float('inf')):
             for key in ('cost_usd', 'minutes'):
                 with self.assertRaises(ValueError):
                     oas.log_run(self.root, **dict(base, **{key: value}))
+
+    def test_cli_cost_report_keeps_distinct_configuration_fields_separate(self):
+        common = [sys.executable, str(SOURCE), 'log-run', '--output', str(self.root), '--task', 'same',
+                  '--mode', 'development', '--result', 'pass', '--cohort', 'coding-v1', '--cost-usd', '2']
+        subprocess.run([*common, '--harness', 'codex 0.154'], check=True, capture_output=True)
+        subprocess.run([*common, '--harness', 'codex', '--runtime-version', '0.154'], check=True, capture_output=True)
+        report = subprocess.run([sys.executable, str(SOURCE), 'report-runs', '--output', str(self.root)],
+                                check=True, capture_output=True, text=True).stdout.splitlines()
+        self.assertEqual(len(report), 3, report)
+        self.assertNotEqual(report[1].split(' | ')[0], report[2].split(' | ')[0])
+        for row in report[1:]:
+            self.assertIn(' | 1 | 1 | 2.00 | 0 | ', row)
 
     def test_malformed_checkpoint_returns_errors_instead_of_crashing(self):
         path = oas.new_task('development', self.root, 'Fix it', ['Regression passes']) / 'task.json'

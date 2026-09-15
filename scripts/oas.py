@@ -368,9 +368,9 @@ def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=
     return args + ['--interactive', message]
 
 
-def launch_command(agent, mode, workspace, task, shared='auto', home=None, **options):
+def launch_command(agent, mode, workspace, task, shared='auto', home=None, *, environ=None, **options):
     cmd = command(agent, mode, workspace, task, shared, home, **options)
-    cmd[0] = executable(agent)
+    cmd[0] = executable(agent, environ)
     if not shutil.which(cmd[0]):
         raise ValueError(f'{cmd[0]} is not installed; use bundle or install its official CLI')
     # Copilot supports permission-bypass environment variables. Fail closed,
@@ -592,11 +592,17 @@ def log_run(output, **fields):
 
 
 def configuration_key(record):
-    """The launch configuration a run was made under, as one comparable string."""
+    """Keep configuration identity separate from its human-readable label."""
+    return tuple(record.get(field) for field in (
+        'mode', 'cohort', 'harness', 'runtime_version', 'lead_model', 'lead_effort',
+        'worker_model', 'worker_effort', 'retry_effort'))
+
+
+def configuration_label(record):
     lead = f"{record.get('lead_model') or 'inherit'}@{record.get('lead_effort') or 'default'}"
     prefix = f'{record.get("mode", "unknown")} / {record.get("cohort") or "unspecified"} / {record["harness"]}'
     if record.get('runtime_version'):
-        prefix += f' {record["runtime_version"]}'
+        prefix += f' [runtime {record["runtime_version"]}]'
     if not record.get('worker_model') and not record.get('worker_effort'):
         return f'{prefix} lead {lead} alone'
     worker = f"{record.get('worker_model') or 'inherit'}@{record.get('worker_effort') or 'default'}"
@@ -613,7 +619,7 @@ def report_runs(output):
         if not line.strip():
             continue
         record = json.loads(line)
-        row = groups.setdefault(configuration_key(record), dict(runs=0, completed=set(), cost=0.0, costed=0, unknown=0, packets=0, escalated=0, corrections=0))
+        row = groups.setdefault(configuration_key(record), dict(label=configuration_label(record), runs=0, completed=set(), cost=0.0, costed=0, unknown=0, packets=0, escalated=0, corrections=0))
         row['runs'] += 1
         if record.get('result') == 'pass':
             row['completed'].add(record['task'])
@@ -627,14 +633,14 @@ def report_runs(output):
         row['escalated'] += record.get('escalated') or 0
         row['corrections'] += record.get('corrections') or 0
     lines = ['configuration | runs | completed tasks | usd per completed task | runs without cost | packets escalated | corrections']
-    for key, row in sorted(groups.items()):
+    for row in sorted(groups.values(), key=lambda row: row['label']):
         # Cost per completed task: everything spent under the configuration, divided by the tasks it completed.
         completed = len(row['completed'])
         if row['unknown'] or not completed:
             per_pass = 'unknown'
         else:
             per_pass = f"{row['cost'] / completed:.2f}"
-        lines.append(f"{key} | {row['runs']} | {completed} | {per_pass} | {row['unknown']} | {row['escalated']}/{row['packets']} | {row['corrections']}")
+        lines.append(f"{row['label']} | {row['runs']} | {completed} | {per_pass} | {row['unknown']} | {row['escalated']}/{row['packets']} | {row['corrections']}")
     if len(lines) == 1:
         lines.append('no runs recorded')
     return '\n'.join(lines)

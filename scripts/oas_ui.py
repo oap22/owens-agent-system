@@ -91,7 +91,7 @@ def parse_models(agent, text):
         return []
 
 
-def model_choices(agent, run=None):
+def model_choices(agent, run=None, environ=None):
     """Model ids the launcher offers for agent: live from the CLI where it can list them, static otherwise."""
     if agent in STATIC_MODELS:
         return list(STATIC_MODELS[agent])
@@ -100,7 +100,7 @@ def model_choices(agent, run=None):
         return []
     run = run or subprocess.run
     try:
-        result = run([oas.executable(agent), *cmd[1:]], capture_output=True, text=True, timeout=8)
+        result = run([oas.executable(agent, environ), *cmd[1:]], capture_output=True, text=True, timeout=8)
     except (ValueError, OSError, subprocess.SubprocessError):
         return []
     return parse_models(agent, result.stdout) if result.returncode == 0 else []
@@ -130,8 +130,8 @@ class Launcher:
         self.scan_root = (self.home / 'Developer/active') if scan_root is None else Path(scan_root)
         self.cwd = Path(os.getcwd()) if cwd is None else Path(cwd)
         self.which = which
-        self.list_models = list_models or model_choices   # injectable: tests must never run a CLI
         self.environ = os.environ if environ is None else environ
+        self.list_models = list_models or (lambda agent: model_choices(agent, environ=self.environ))
         self.screen = 'mode'
         self.cursor = {'mode': 0, 'agent': 0, 'model': 0, 'workspace': 0, 'browser': 0}
         self.mode = None
@@ -388,7 +388,8 @@ class Launcher:
     def _launch(self):
         """Choosing a workspace launches an open session; refusals stay on screen as error."""
         try:
-            cmd = oas.launch_command(self.agent, self.mode, self.workspace, '', 'auto', self.home, model=self.model)
+            cmd = oas.launch_command(self.agent, self.mode, self.workspace, '', 'auto', self.home,
+                                     model=self.model, environ=self.environ)
             self.launch_request = (cmd, oas.workspace_path(self.workspace))
         except ValueError as exc:
             self.error = str(exc)
