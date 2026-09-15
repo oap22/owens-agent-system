@@ -57,7 +57,7 @@ class SetupTest(unittest.TestCase):
 
     def test_failed_cli_install_preserves_concurrent_edits_during_recovery(self):
         for existed in (False, True):
-            for replacement in ('text', 'symlink', 'absent'):
+            for replacement in ('text', 'symlink', 'absent', 'mode'):
                 with self.subTest(existed=existed, replacement=replacement):
                     home = self.home / f'{existed}-{replacement}'
                     home.mkdir()
@@ -69,12 +69,16 @@ class SetupTest(unittest.TestCase):
                     external.write_text('concurrent edit')
                     real_write = m.write_atomic
                     calls = 0
+                    installed_first = None
                     def fail_third(target, data, mode):
-                        nonlocal calls
+                        nonlocal calls, installed_first
                         calls += 1
                         if calls == 3:
+                            installed_first = first.read_bytes()
                             if replacement == 'text':
                                 first.write_text('concurrent edit')
+                            elif replacement == 'mode':
+                                first.chmod(0o400)
                             else:
                                 first.unlink()
                                 if replacement == 'symlink':
@@ -89,6 +93,10 @@ class SetupTest(unittest.TestCase):
                             m.main()
                     if replacement == 'absent':
                         self.assertFalse(first.exists())
+                    elif replacement == 'mode':
+                        self.assertTrue(first.exists())
+                        self.assertEqual(first.read_bytes(), installed_first)
+                        self.assertEqual(m.stat.S_IMODE(first.stat().st_mode), 0o400)
                     else:
                         self.assertEqual(first.read_text(), 'concurrent edit')
                         self.assertEqual(first.is_symlink(), replacement == 'symlink')
@@ -203,6 +211,40 @@ class SetupTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             m.rollback_apply(actions)
         self.assertEqual(self.snapshot(), before)
+
+    def test_rollback_keeps_permission_edits_to_original_and_created_files(self):
+        original, backup = self.install()
+        created = self.home / '.codex/AGENTS.md'
+        for target in (original, created):
+            target.chmod(0o400)
+        before = {target: target.read_bytes() for target in (original, created)}
+        actions = m.rollback_plan(self.home, backup)
+        self.assertEqual([a for a, t, _ in actions if t in before], ['keep', 'keep'])
+        m.rollback_apply(actions)
+        for target, data in before.items():
+            self.assertEqual(target.read_bytes(), data)
+            self.assertEqual(m.stat.S_IMODE(target.stat().st_mode), 0o400)
+
+    def test_rollback_refuses_permission_edit_after_planning(self):
+        original, backup = self.install()
+        actions = m.rollback_plan(self.home, backup)
+        original.chmod(0o400)
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, 'changed since planning'):
+            m.rollback_apply(actions)
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(m.stat.S_IMODE(original.stat().st_mode), 0o400)
+
+    def test_legacy_rollback_manifest_without_installed_mode(self):
+        original, backup = self.install()
+        manifest = backup / 'manifest.json'
+        records = json.loads(manifest.read_text())
+        for record in records:
+            record.pop('installed_mode', None)
+        manifest.write_text(json.dumps(records))
+        m.rollback_apply(m.rollback_plan(self.home, backup))
+        self.assertEqual(original.read_text(), 'My instructions')
+        self.assertEqual(m.stat.S_IMODE(original.stat().st_mode), 0o640)
 
     def test_installer_keeps_explicit_runtime_selection(self):
         binary = self.home / 'Codex with spaces'

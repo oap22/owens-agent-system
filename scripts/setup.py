@@ -135,6 +135,13 @@ def write_atomic(target, data, mode):
         if temp.exists(): temp.unlink()
 
 
+def matches_installed(target, digest, mode=None):
+    """Older manifests have no installed mode; retain their byte-only comparison."""
+    return (not target.is_symlink() and not any(p.is_symlink() for p in target.parents)
+            and target.is_file() and (mode is None or stat.S_IMODE(target.stat().st_mode) == mode)
+            and hashlib.sha256(target.read_bytes()).hexdigest() == digest)
+
+
 def apply(changes, home):
     home = Path(home).resolve()
     for target, before, _, _ in changes:
@@ -153,7 +160,9 @@ def apply(changes, home):
         if before is not None:
             dest = backup / rel; dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(before); os.chmod(dest, 0o600)
-        records.append(dict(path=str(rel), existed=before is not None, mode=mode, installed_sha256=hashlib.sha256(after).hexdigest()))
+        records.append(dict(path=str(rel), existed=before is not None, mode=mode,
+                            installed_mode=0o755 if executable else mode,
+                            installed_sha256=hashlib.sha256(after).hexdigest()))
     (backup / 'manifest.json').write_text(json.dumps(records, indent=2)+'\n', encoding='utf-8')
     done = []
     try:
@@ -162,19 +171,19 @@ def apply(changes, home):
             if (target.read_bytes() if target.exists() else None) != before:
                 raise ValueError(f'Concurrent change: {target.name}')
             target.parent.mkdir(parents=True,exist_ok=True)
-            write_atomic(target, after, 0o755 if executable else record['mode'])
-            done.append((target,before,after,record['mode']))
+            write_atomic(target, after, record['installed_mode'])
+            done.append((target,before,record))
     except Exception:
-        for target,before,after,mode in reversed(done):
+        for target,before,record in reversed(done):
             try:
                 refuse_symlink(home, target, target.relative_to(home))
-                if (target.read_bytes() if target.exists() else None) != after:
+                if not matches_installed(target, record['installed_sha256'], record['installed_mode']):
                     print(f'Kept concurrent change during recovery: {target}', file=sys.stderr)
                     continue
                 if before is None:
                     target.unlink()
                 else:
-                    write_atomic(target, before, mode)
+                    write_atomic(target, before, record['mode'])
             except (OSError, ValueError) as error:
                 # Recover other untouched writes without masking the install
                 # failure or overwriting a concurrently replaced target.
@@ -185,7 +194,7 @@ def apply(changes, home):
 
 
 def rollback_plan(home, backup):
-    """Return (action, target, payload); restore payload is (bytes, mode, installed digest)."""
+    """Return (action, target, payload); restore payload is (bytes, mode, (installed digest, mode))."""
     home, backup = Path(home).resolve(), Path(backup).resolve()
     manifest = backup / 'manifest.json'
     if not manifest.is_file():
@@ -197,19 +206,18 @@ def rollback_plan(home, backup):
             raise ValueError(f'Manifest path must be relative and inside home: {rel!r}')
         target = home / rel
         refuse_symlink(home, target, rel)
+        expected = (record['installed_sha256'], record.get('installed_mode'))
         if not target.exists():
             actions.append(('absent', target, None))
-        elif hashlib.sha256(target.read_bytes()).hexdigest() != record['installed_sha256']:
+        elif not matches_installed(target, *expected):
             actions.append(('keep', target, None))
         elif record['existed']:
             saved = backup / rel
             if not saved.is_file():
                 raise ValueError(f'Backup copy missing: {rel}')
-            actions.append(('restore', target, (saved.read_bytes(), record['mode'], record['installed_sha256'])))
-        elif hashlib.sha256(target.read_bytes()).hexdigest() == record['installed_sha256']:
-            actions.append(('remove', target, record['installed_sha256']))
+            actions.append(('restore', target, (saved.read_bytes(), record['mode'], expected)))
         else:
-            actions.append(('keep', target, None))
+            actions.append(('remove', target, expected))
     return actions
 
 
@@ -223,17 +231,17 @@ def rollback_apply(actions):
         if target.is_symlink() or any(p.is_symlink() for p in target.parents):
             raise ValueError(f'Refusing symlink target: {target}')
         expected = payload[2] if action == 'restore' else payload
-        if not target.is_file() or hashlib.sha256(target.read_bytes()).hexdigest() != expected:
+        if not matches_installed(target, *expected):
             raise ValueError(f'File changed since planning: {target.name}')
     for action, target, payload in actions:
         if action == 'restore':
             data, mode, expected = payload
-            if target.is_symlink() or hashlib.sha256(target.read_bytes()).hexdigest() != expected:
+            if not matches_installed(target, *expected):
                 raise ValueError(f'File changed since planning: {target.name}')
             target.parent.mkdir(parents=True, exist_ok=True)
             write_atomic(target, data, mode)
         elif action == 'remove':
-            if hashlib.sha256(target.read_bytes()).hexdigest() != payload:
+            if not matches_installed(target, *payload):
                 raise ValueError(f'File changed since planning: {target.name}')
             target.unlink()
         counts[action] += 1
