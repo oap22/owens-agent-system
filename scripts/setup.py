@@ -163,17 +163,29 @@ def apply(changes, home):
                 raise ValueError(f'Concurrent change: {target.name}')
             target.parent.mkdir(parents=True,exist_ok=True)
             write_atomic(target, after, 0o755 if executable else record['mode'])
-            done.append((target,before,record['mode']))
+            done.append((target,before,after,record['mode']))
     except Exception:
-        for target,before,mode in reversed(done):
-            if before is None: target.unlink()
-            else: target.write_bytes(before); os.chmod(target,mode)
+        for target,before,after,mode in reversed(done):
+            try:
+                refuse_symlink(home, target, target.relative_to(home))
+                if (target.read_bytes() if target.exists() else None) != after:
+                    print(f'Kept concurrent change during recovery: {target}', file=sys.stderr)
+                    continue
+                if before is None:
+                    target.unlink()
+                else:
+                    write_atomic(target, before, mode)
+            except (OSError, ValueError) as error:
+                # Recover other untouched writes without masking the install
+                # failure or overwriting a concurrently replaced target.
+                print(f'Could not recover {target}: {error}', file=sys.stderr)
+        print(f'Installation failed. Recovery backup: {backup}', file=sys.stderr)
         raise
     return backup
 
 
 def rollback_plan(home, backup):
-    """Return (action, target, payload) per manifest record; payload is (bytes, mode) for 'restore'."""
+    """Return (action, target, payload); restore payload is (bytes, mode, installed digest)."""
     home, backup = Path(home).resolve(), Path(backup).resolve()
     manifest = backup / 'manifest.json'
     if not manifest.is_file():

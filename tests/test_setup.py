@@ -1,4 +1,6 @@
+import contextlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -52,6 +54,52 @@ class SetupTest(unittest.TestCase):
             with self.assertRaises(OSError):m.apply(changes,self.home)
         self.assertEqual(p.read_text(),'original')
         self.assertFalse((self.home/'.claude/CLAUDE.md').exists())
+
+    def test_failed_cli_install_preserves_concurrent_edits_during_recovery(self):
+        for existed in (False, True):
+            for replacement in ('text', 'symlink', 'absent'):
+                with self.subTest(existed=existed, replacement=replacement):
+                    home = self.home / f'{existed}-{replacement}'
+                    home.mkdir()
+                    first = home / '.codex/AGENTS.md'
+                    first.parent.mkdir()
+                    if existed:
+                        first.write_text('original personal instructions')
+                    external = home / 'user-file'
+                    external.write_text('concurrent edit')
+                    real_write = m.write_atomic
+                    calls = 0
+                    def fail_third(target, data, mode):
+                        nonlocal calls
+                        calls += 1
+                        if calls == 3:
+                            if replacement == 'text':
+                                first.write_text('concurrent edit')
+                            else:
+                                first.unlink()
+                                if replacement == 'symlink':
+                                    first.symlink_to(external)
+                            raise OSError('simulated third-file failure')
+                        return real_write(target, data, mode)
+                    errors = io.StringIO()
+                    with patch.object(sys, 'argv', ['setup.py', '--home', str(home), '--apply']), \
+                         patch.object(m, 'write_atomic', side_effect=fail_third), \
+                         contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(errors):
+                        with self.assertRaisesRegex(OSError, 'third-file failure'):
+                            m.main()
+                    if replacement == 'absent':
+                        self.assertFalse(first.exists())
+                    else:
+                        self.assertEqual(first.read_text(), 'concurrent edit')
+                        self.assertEqual(first.is_symlink(), replacement == 'symlink')
+                    self.assertEqual(external.read_text(), 'concurrent edit')
+                    self.assertFalse((home / '.claude/CLAUDE.md').exists(), 'untouched writes must still recover')
+                    backups = list((home / '.local/state/owens-agent-system/backups').iterdir())
+                    self.assertEqual(len(backups), 1)
+                    if existed:
+                        self.assertEqual((backups[0] / '.codex/AGENTS.md').read_text(), 'original personal instructions')
+                    self.assertIn(str(backups[0]), errors.getvalue())
+                    self.assertIn(str(first), errors.getvalue())
 
     def test_merge_keeps_other_settings(self):
         self.assertEqual(m.merged({'permissions':{'allow':['Read']},'model':'mine'},{'permissions':{'disableBypassPermissionsMode':'disable'}}),{'permissions':{'allow':['Read'],'disableBypassPermissionsMode':'disable'},'model':'mine'})
