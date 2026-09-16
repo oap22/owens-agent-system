@@ -2,7 +2,7 @@
 
 A personal operating system for research, software development, everyday operations, and learning. Shared across coding agents, with native launch adapters for Codex, Claude Code, Cursor, GitHub Copilot, and OpenCode.
 
-**The loop: Frame → Work → Prove → Hand off.** Every substantial task has an outcome, an ownership boundary, evidence, and a next action. Simple requests stay simple.
+**The loop: Frame → Work → Prove → Hand off → Reflect.** Every substantial task has an outcome, an ownership boundary, evidence, a next action, and a retrospective that files one implementation-ready issue. Simple requests stay simple.
 
 This is a working configuration and workflow kit, not a new hosted agent service or a trained model. It uses your existing agent accounts and skills. No API key, daemon, external scheduler, or paid service is created by setup.
 
@@ -25,6 +25,18 @@ python3 scripts/oas.py run development --agent claude --workspace /absolute/path
 `--lead-effort` sets the lead session's reasoning effort; `--worker-model` and `--worker-effort` define the `implementor` role (a Claude Code subagent passed inline, or a Codex role layer written under the workspace's ignored `.oas/roles/`). Set both: a Claude Code subagent with no effort of its own inherits the lead's. Add `--worker-retry-effort medium` to launch a second rung, `implementor-retry`, on the same cheap model at higher effort; the lead re-sends a failed packet to it once before taking the slice itself. Codex and Claude only; other adapters refuse the options. The lead delegates by task packet and verifies from diffs, per [[docs/token-economy]] and [[templates/task-packet]]. Model choices remain explicit; current examples and tuning guidance are in [[docs/models]].
 
 `preview` also prints an estimated token count for the guidance and task it would send. After a task, `python3 scripts/oas.py log-run --output /path/.oas ...` records the configuration, result, and cost, and `report-runs` prints cost per completed task by configuration, which is the number that decides whether the split stays.
+
+## Reflect after the session
+
+After the hand off, the lead writes a retrospective and files it as a GitHub issue that another agent can implement without asking questions:
+
+```sh
+python3 scripts/oas.py retro --output /absolute/path/to/project/.oas --title "Fix the failing CSV import" --mode development --harness claude --outcome pass --corrections 1
+python3 scripts/oas.py verify-retro /absolute/path/to/project/.oas/retros/<id>/retrospective.md
+python3 scripts/oas.py retro-issue /absolute/path/to/project/.oas/retros/<id>/retrospective.md
+```
+
+`retro` scaffolds `templates/retrospective.md` with the known session facts: what went well, what went wrong with evidence, root causes by layer, and one proposed change with files, steps, acceptance criteria, validation, and scope. `verify-retro` refuses unfilled placeholders, a proposal an agent could not act on, and lines shaped like credentials. `retro-issue` opens the issue through `gh` in this repository by default, labeled `retrospective`, records the URL in `issue.json`, and will not file the same report twice; `--dry-run` prints what it would send. A summary of exactly `No change proposed.` skips the issue. The issue is a proposal with a failure example, not authorization and not evidence of improvement. See [[docs/retrospective]].
 
 `preview` prints the planned command and assembled instructions without starting an agent or writing files. Worker snapshot paths are materialized by `run` or `doctor`. `run` opens the selected agent in the target workspace with the same core instructions and its native permission controls. `--agent` defaults to `codex`; use `claude`, `cursor`, `copilot`, or `opencode` to switch. `--model ALIAS_OR_ID` picks the session model through the agent's native flag; omit it to inherit your current default. Both accept `--shared auto|always|never` (default `auto`): `auto` omits `prompts/core.md` and `prompts/owen.md` when the agent's global instruction file already contains the current managed block, `always` sends them regardless, and `never` omits them; the workflow and task are always sent. Existing account login, installed skills, and connectors remain available where that agent supports them. It does not overwrite your global configuration or project instructions. Choose a task worktree first for development; see [[workflows/development]].
 
@@ -66,7 +78,8 @@ Run bare `oas` on an interactive terminal, or `oas ui` explicitly, to pick mode,
 - `config/profiles/`: mode-specific settings; these are source layers, not legacy inline Codex profiles.
 - `prompts/`: concise shared guidance and a sanitized working profile.
 - `workflows/`: development, research, operations, tutoring, and unattended contracts.
-- `scripts/oas.py`: launcher, configuration checks, task creation, evidence validation, and the run log (`log-run`, `report-runs`).
+- `templates/`: task contract, task packet, handoff, claim ledger, and retrospective outlines.
+- `scripts/oas.py`: launcher, configuration checks, task creation, evidence validation, the run log (`log-run`, `report-runs`), and retrospectives (`retro`, `verify-retro`, `retro-issue`).
 - `evals/`: scenario bank and a measurable improvement protocol.
 - `docs/sources.md`: current primary sources, adoption decisions, and limits of the evidence.
 
@@ -78,7 +91,7 @@ Run `python3 -m unittest discover -s tests -v` and `python3 scripts/oas.py check
 
 The initial defaults are evidence-informed, not demonstrated optimal. Judge them against your own completed tasks using [[evals/README]]. Never promote a prompt change solely because its author says it improved.
 
-See [[docs/architecture]], [[docs/permissions]], [[docs/setup]], [[docs/personalization]], [[docs/models]], [[docs/audit-2026-09-15]], and [[docs/token-economy]] for the design and adoption path.
+See [[docs/architecture]], [[docs/permissions]], [[docs/setup]], [[docs/personalization]], [[docs/models]], [[docs/audit-2026-09-15]], [[docs/token-economy]], and [[docs/retrospective]] for the design and adoption path.
 
 ## Use it in your normal agent sessions
 

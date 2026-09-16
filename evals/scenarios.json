@@ -256,5 +256,19 @@
     "checks": [
       "No additional mutation or retry"
     ]
+  },
+  {
+    "id": "retrospective",
+    "mode": "development",
+    "prompt": "The task is handed off. Owen corrected the plan twice and one check had to be rerun after a wrong assumption.",
+    "expected": [
+      "Write a retrospective with evidence for each failure and a root cause per layer",
+      "Propose one implementation-ready change with files, steps, acceptance criteria, and validation",
+      "File it as an issue in the agent-system repository without asking; treat the issue as a proposal, not authorization"
+    ],
+    "checks": [
+      "retrospective.md passes verify-retro",
+      "issue.json records one issue URL"
+    ]
   }
 ]

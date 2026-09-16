@@ -776,3 +776,196 @@ class TokenEconomyTest(unittest.TestCase):
         self.assertIn('codex lead inherit@default worker inherit@low | 1 | 1 | 0.80', out.getvalue())
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(oas.main(['report-runs', '--output', str(self.root / 'nowhere')]), 2)
+
+
+class RetrospectiveTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+
+    def scaffold(self, **options):
+        return oas.new_retro(self.root, 'Fix the CSV import', 'development', 'claude', **options)
+
+    def filled(self, summary='Add a CSV fixture to the development scenario bank', **header):
+        facts = dict(task='csv-1', model='claude-fable-5-1@high', workspace='/work/project', outcome='partial', corrections=2, cost_usd=1.25, minutes=40)
+        facts.update(header)
+        path = self.scaffold(**facts)
+        text = path.read_text(encoding='utf-8')
+        body = text[text.index('## What went well'):]
+        report = text[:text.index('## What went well')] + '\n'.join([
+            '## What went well', '', '- The worktree was inspected first; `workflows/development.md` step 1 produced it.', '',
+            '## What went wrong', '', '- The import test was rerun three times | Expected: one run after the fix | Evidence: `.oas/csv-1/check.log` | Cost: 12 minutes', '',
+            '## Root causes', '', '- Repeated reruns <- policy guidance: step 5 does not say what "unresolved concern" means.', '',
+            '## Proposed change', '', f'Summary: {summary}', '',
+            'Why: The rerun loop above would have stopped at the first passing run with a fixture to compare against.', '',
+            'Files to change:', '- `evals/scenarios.json`: add a scenario for the CSV import', '- `workflows/development.md`: define the stop rule in step 5', '',
+            'Implementation steps:', '1. Add the scenario with a check that names the fixture file.', '2. Edit step 5 to stop after one passing run of the required checks.', '',
+            'Acceptance criteria:', '- `check` reports one more scenario', '- The workflow names the stop rule in one sentence', '',
+            'Validation:', '```sh', 'python3 scripts/oas.py check', 'python3 -m unittest discover -s tests -v', '```', '',
+            'Out of scope:', '- Changing the research workflow', ''])
+        del body
+        path.write_text(report, encoding='utf-8')
+        return path
+
+    def test_scaffold_fills_known_facts_and_verification_demands_the_rest(self):
+        path = self.scaffold(model='inherit', outcome='pass', corrections=0)
+        self.assertEqual(path.parent.parent, self.root / oas.RETRO_DIR)
+        text = path.read_text(encoding='utf-8')
+        self.assertTrue(text.startswith('# Retrospective: Fix the CSV import\n'))
+        self.assertIn('- Mode: development\n', text)
+        self.assertIn('- Harness: claude\n', text)
+        self.assertIn('- Outcome: pass\n', text)
+        self.assertIn('- Corrections by Owen: 0\n', text)
+        self.assertIn('- Workspace: <absolute path>\n', text, 'unknown facts stay as placeholders')
+        errors = oas.validate_retro(path)
+        self.assertTrue(any(e.startswith('Unfilled placeholder: <absolute path>') for e in errors), errors)
+        self.assertTrue(any(e.startswith('Unfilled placeholder: <one sentence naming the change') for e in errors), 'the template summary is a placeholder, not a proposal')
+        self.assertTrue(all(e.startswith('Unfilled placeholder: ') for e in errors), 'the template is structurally complete; only its placeholders block filing')
+        for bad in (dict(mode='nope'), dict(harness=' '), dict(outcome='done'), dict(corrections=-1), dict(cost_usd=float('nan'))):
+            options = dict(mode='development', harness='claude'); options.update(bad)
+            with self.assertRaises(ValueError, msg=bad):
+                oas.new_retro(self.root, 'Fix it', options.pop('mode'), options.pop('harness'), **options)
+
+    def test_filled_report_verifies_and_renders_an_implementation_ready_issue(self):
+        path = self.filled()
+        self.assertEqual(oas.validate_retro(path), [])
+        title, body = oas.retro_issue(path)
+        self.assertEqual(title, 'Retrospective: Add a CSV fixture to the development scenario bank')
+        self.assertTrue(body.startswith('The rerun loop above'), 'the issue opens with the reason')
+        summary = body[:body.index('<details>')]
+        for heading in ('## Problem observed', '## Root causes', '## Files to change', '## Implementation steps', '## Acceptance criteria', '## Validation', '## Out of scope', '## Session'):
+            self.assertEqual(summary.count(heading + '\n'), 1, heading)
+        self.assertLess(body.index('## Problem observed'), body.index('## Files to change'))
+        self.assertIn('- `evals/scenarios.json`: add a scenario for the CSV import', body)
+        self.assertIn('- Cost and time: 1.25, 40\n', body)
+        self.assertIn('<details><summary>Full retrospective</summary>', body)
+        self.assertIn('it grants no authorization', body)
+
+    def test_verification_rejects_structure_gaps_placeholders_and_credentials(self):
+        path = self.filled()
+        good = path.read_text(encoding='utf-8')
+        cases = {
+            'no title': ('# Retrospective: Fix the CSV import', '# Retro'),
+            'missing header fact': ('- Harness: claude\n', ''),
+            'bad outcome': ('- Outcome: partial', '- Outcome: done'),
+            'section out of order': ('## Root causes', '## Causes'),
+            'empty went wrong': ('- The import test was rerun three times', 'The import test was rerun'),
+            'no files': ('- `evals/scenarios.json`: add a scenario for the CSV import\n- `workflows/development.md`: define the stop rule in step 5\n', '- scenarios: add one\n'),
+            'no steps': ('1. Add the scenario with a check that names the fixture file.\n2. Edit step 5 to stop after one passing run of the required checks.\n', '- add it\n'),
+            'no criteria': ('- `check` reports one more scenario\n- The workflow names the stop rule in one sentence\n', '\n'),
+            'no validation': ('python3 scripts/oas.py check\npython3 -m unittest discover -s tests -v\n', ''),
+            'no out of scope': ('- Changing the research workflow\n', '\n'),
+            'placeholder left': ('- Changing the research workflow', '- <what this issue deliberately leaves alone>'),
+            'credential': ('- Changing the research workflow', '- token ghp_' + 'a1B2' * 6),
+            'multi-line summary': ('Summary: Add a CSV fixture to the development scenario bank\n', 'Summary: Add a CSV fixture\nto the bank\n'),
+            'title too long': ('Summary: Add a CSV fixture to the development scenario bank\n', 'Summary: ' + 'x' * 260 + '\n'),
+        }
+        for name, (old, new) in cases.items():
+            self.assertEqual(good.count(old), 1, name)
+            path.write_text(good.replace(old, new), encoding='utf-8')
+            self.assertNotEqual(oas.validate_retro(path), [], name)
+            with self.assertRaises(ValueError, msg=name):
+                oas.retro_issue(path)
+        path.write_text(good.replace('- The import test was rerun three times | Expected: one run after the fix | Evidence: `.oas/csv-1/check.log` | Cost: 12 minutes', '- None observed.'), encoding='utf-8')
+        self.assertEqual(oas.validate_retro(path), [], 'an explicit "None observed." satisfies a section')
+
+    def test_no_change_proposed_skips_the_issue_without_calling_gh(self):
+        path = self.filled(summary=oas.NO_CHANGE)
+        self.assertEqual(oas.validate_retro(path), [])
+        self.assertIsNone(oas.retro_issue(path))
+        with patch.object(oas.subprocess, 'run', side_effect=AssertionError('gh must not run')):
+            self.assertIsNone(oas.file_retro_issue(path, repo='oap22/owens-agent-system'))
+        self.assertFalse((path.parent / 'issue.json').exists())
+        self.assertFalse((path.parent / 'issue-body.md').exists())
+
+    def test_issue_is_filed_once_through_gh_and_recorded(self):
+        path = self.filled()
+        url = 'https://github.com/oap22/owens-agent-system/issues/42'
+        calls = []
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return subprocess.CompletedProcess(cmd, 0, stdout=f'\nCreating issue in oap22/owens-agent-system\n\n{url}\n', stderr='')
+        with patch.object(oas.subprocess, 'run', side_effect=fake_run), patch.object(oas.shutil, 'which', return_value='/usr/bin/gh'):
+            record = oas.file_retro_issue(path, repo='oap22/owens-agent-system', labels=('retrospective', 'enhancement'))
+        self.assertEqual(record['url'], url)
+        cmd, kwargs = calls[0]
+        self.assertEqual(cmd[:3], ['gh', 'issue', 'create'])
+        self.assertEqual(cmd[cmd.index('--repo') + 1], 'oap22/owens-agent-system')
+        self.assertEqual(cmd[cmd.index('--title') + 1], 'Retrospective: Add a CSV fixture to the development scenario bank')
+        self.assertEqual(cmd.count('--label'), 2)
+        self.assertEqual(Path(cmd[cmd.index('--body-file') + 1]), path.parent / 'issue-body.md')
+        self.assertFalse(kwargs.get('shell'), 'never through a shell')
+        self.assertEqual(kwargs['cwd'], oas.ROOT)
+        self.assertEqual(json.loads((path.parent / 'issue.json').read_text(encoding='utf-8'))['url'], url)
+        self.assertEqual((path.parent / 'issue-body.md').read_text(encoding='utf-8'), oas.retro_issue(path)[1])
+        with self.assertRaises(ValueError) as caught, patch.object(oas.subprocess, 'run', side_effect=AssertionError('gh must not run again')):
+            oas.file_retro_issue(path, repo='oap22/owens-agent-system')
+        self.assertIn(url, str(caught.exception))
+
+    def test_gh_failure_and_bad_output_leave_no_record(self):
+        path = self.filled()
+        failures = [subprocess.CompletedProcess([], 1, stdout='', stderr='could not add label: retrospective not found'),
+                    subprocess.CompletedProcess([], 0, stdout='not a url\n', stderr='')]
+        for completed in failures:
+            with patch.object(oas.subprocess, 'run', return_value=completed), patch.object(oas.shutil, 'which', return_value='/usr/bin/gh'):
+                with self.assertRaises(ValueError):
+                    oas.file_retro_issue(path, repo='oap22/owens-agent-system')
+            self.assertFalse((path.parent / 'issue.json').exists())
+        with patch.object(oas.shutil, 'which', return_value=None):
+            with self.assertRaises(ValueError):
+                oas.file_retro_issue(path, repo='oap22/owens-agent-system')
+        for repo in ('owens-agent-system', 'a/b/c', 'a b/c'):
+            with self.assertRaises(ValueError, msg=repo):
+                oas.file_retro_issue(path, repo=repo, dry_run=True)
+        with self.assertRaises(ValueError):
+            oas.file_retro_issue(path, repo='oap22/owens-agent-system', labels=('',), dry_run=True)
+
+    def test_default_repo_is_this_kit_and_parses_both_remote_forms(self):
+        self.assertEqual(oas.repo_slug('git@github.com:oap22/owens-agent-system.git\n'), 'oap22/owens-agent-system')
+        self.assertEqual(oas.repo_slug('https://github.com/oap22/owens-agent-system'), 'oap22/owens-agent-system')
+        self.assertEqual(oas.repo_slug('https://github.com/oap22/owens-agent-system.git/'), 'oap22/owens-agent-system')
+        with self.assertRaises(ValueError):
+            oas.repo_slug('https://gitlab.com/oap22/owens-agent-system.git')
+        with patch.object(oas.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, stdout='git@github.com:oap22/owens-agent-system.git\n', stderr='')) as run:
+            self.assertEqual(oas.default_repo(), 'oap22/owens-agent-system')
+        self.assertEqual(run.call_args.args[0][:4], ['git', '-C', str(oas.ROOT), 'remote'])
+        with patch.object(oas.subprocess, 'run', side_effect=subprocess.CalledProcessError(128, 'git')):
+            with self.assertRaises(ValueError):
+                oas.default_repo()
+
+    def test_cli_scaffold_verify_and_dry_run(self):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            self.assertEqual(oas.main(['retro', '--output', str(self.root), '--title', 'Fix it', '--mode', 'development', '--harness', 'codex', '--outcome', 'pass']), 0)
+            scaffold = Path(out.getvalue().strip())
+            self.assertEqual(oas.main(['verify-retro', str(scaffold)]), 1)
+            self.assertEqual(oas.main(['retro-issue', str(scaffold), '--dry-run', '--repo', 'oap22/owens-agent-system']), 2)
+        self.assertIn('Unfilled placeholder', err.getvalue())
+        path = self.filled()
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), patch.object(oas.subprocess, 'run', side_effect=AssertionError('dry run must not call gh')):
+            self.assertEqual(oas.main(['verify-retro', str(path)]), 0)
+            self.assertEqual(oas.main(['retro-issue', str(path), '--dry-run', '--repo', 'oap22/owens-agent-system', '--label', 'enhancement']), 0)
+        self.assertIn('PASS: retrospective structure', out.getvalue())
+        self.assertIn('Retrospective: Add a CSV fixture to the development scenario bank\n\nThe rerun loop', out.getvalue())
+        self.assertIn('--label enhancement', err.getvalue())
+        self.assertFalse((path.parent / 'issue.json').exists())
+        with patch.object(oas.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, stdout='https://github.com/oap22/owens-agent-system/issues/7\n', stderr='')), \
+                patch.object(oas.shutil, 'which', return_value='/usr/bin/gh'), contextlib.redirect_stdout(out):
+            self.assertEqual(oas.main(['retro-issue', str(path), '--repo', 'oap22/owens-agent-system']), 0)
+        self.assertTrue(out.getvalue().endswith('https://github.com/oap22/owens-agent-system/issues/7\n'))
+
+    def test_contract_and_template_agree_on_the_reflect_step(self):
+        contract = (oas.ROOT / 'prompts/core.md').read_text(encoding='utf-8')
+        self.assertIn('Frame → Work → Prove → Hand off → Reflect', contract)
+        for command in ('oas.py retro', 'verify-retro', 'retro-issue', 'templates/retrospective.md'):
+            self.assertIn(command, contract)
+        self.assertIn('authorizes nothing', contract)
+        template = (oas.ROOT / oas.RETRO_TEMPLATE).read_text(encoding='utf-8')
+        _, header, sections = oas.parse_retro(template)
+        self.assertEqual(tuple(header), oas.RETRO_HEADER)
+        self.assertEqual(tuple(sections), oas.RETRO_SECTIONS)
+        self.assertEqual(tuple(label for label in oas.proposal_fields(sections['Proposed change']) if label not in ('Summary', 'Why')), oas.RETRO_FIELDS)
+        self.assertIn('retrospective', {item['id'] for item in oas.scenarios()})
+        self.assertIn('Retrospective path and issue URL:', (oas.ROOT / 'templates/handoff.md').read_text(encoding='utf-8'))
