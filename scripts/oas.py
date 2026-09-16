@@ -51,12 +51,26 @@ GUIDANCE_BUDGET_TOKENS = 3500
 TOKEN_CALIBRATION = 'evals/token-calibration.json'
 RUN_RESULTS = ('pass', 'fail', 'partial')
 RUN_LOG = 'evals/runs.jsonl'
+# Session retrospectives: the report an agent writes after hand off and the issue it files from it.
+RETRO_TEMPLATE = 'templates/retrospective.md'
+RETRO_DIR = 'retros'
+RETRO_TITLE = '# Retrospective: '
+RETRO_HEADER = ('Task', 'Mode', 'Harness', 'Model and effort', 'Workspace', 'Date', 'Outcome', 'Corrections by Owen', 'Cost and time')
+RETRO_SECTIONS = ('What went well', 'What went wrong', 'Root causes', 'Proposed change')
+RETRO_FIELDS = ('Files to change', 'Implementation steps', 'Acceptance criteria', 'Validation', 'Out of scope')
+NO_CHANGE = 'No change proposed.'
+RETRO_LABEL = 'retrospective'
+ISSUE_TITLE_PREFIX = 'Retrospective: '
+ISSUE_TITLE_LIMIT = 256     # GitHub issue title limit
+ISSUE_BODY_LIMIT = 65536    # GitHub issue body limit
+# Heuristic only: shapes of common credentials that must never reach a public issue.
+SECRET_PATTERN = re.compile(r'gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY|Bearer [A-Za-z0-9._-]{20,}')
 
 
 def executable(agent, environ=None):
     """Honor an explicit runtime selection without silently switching installations."""
     names = {'codex': 'codex', 'claude': 'claude', 'cursor': 'cursor-agent',
-             'copilot': 'copilot', 'opencode': 'opencode'}
+             'copilot': 'copilot', 'opencode': 'opencode', 'gh': 'gh'}
     default = names[agent]
     selected = (os.environ if environ is None else environ).get(f'OAS_{agent.upper()}_BIN')
     if not selected:
@@ -646,6 +660,235 @@ def report_runs(output):
     return '\n'.join(lines)
 
 
+def template_placeholders():
+    """Angle-bracket placeholders in the retrospective template; a report may not still contain them."""
+    return sorted(set(re.findall(r'<[^<>\n`]+>', read(ROOT / RETRO_TEMPLATE))))
+
+
+def new_retro(output, title, mode, harness, task=None, model=None, workspace=None, outcome=None, corrections=None, cost_usd=None, minutes=None):
+    """Scaffold OUTPUT/retros/<id>/retrospective.md from the template with the known session facts filled in.
+
+    Facts not given stay as placeholders so `verify-retro` refuses the report until the lead fills them."""
+    if mode not in MODES:
+        raise ValueError('Unknown mode')
+    if not isinstance(title, str) or not title.strip() or not isinstance(harness, str) or not harness.strip():
+        raise ValueError('Retrospective requires a nonempty title and harness')
+    if outcome is not None and outcome not in RUN_RESULTS:
+        raise ValueError(f'outcome must be one of {", ".join(RUN_RESULTS)}')
+    if corrections is not None and (type(corrections) is not int or corrections < 0):
+        raise ValueError('corrections must be a nonnegative integer')
+    for name, value in (('cost_usd', cost_usd), ('minutes', minutes)):
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0):
+            raise ValueError(f'{name} must be a nonnegative number or omitted when unknown')
+    fills = {'<task title>': title.strip(), '<task id or short title>': (task or title).strip(), '<development | research | ops | tutor | unattended>': mode,
+             '<claude | codex | cursor | copilot | opencode>': harness.strip(), '<YYYY-MM-DD>': datetime.now(timezone.utc).strftime('%Y-%m-%d')}
+    if model is not None:
+        fills['<model@effort or inherit>'] = model.strip()
+    if workspace is not None:
+        fills['<absolute path>'] = str(workspace).strip()
+    if outcome is not None:
+        fills['<pass | partial | fail>'] = outcome
+    if corrections is not None:
+        fills['<count>'] = str(corrections)
+    if cost_usd is not None:
+        fills['<usd or unknown>'] = f'{float(cost_usd):.2f}'
+    if minutes is not None:
+        fills['<minutes or unknown>'] = f'{float(minutes):g}'
+    text = read(ROOT / RETRO_TEMPLATE)
+    for placeholder, value in fills.items():
+        if placeholder not in text:
+            raise ValueError(f'templates/retrospective.md no longer carries {placeholder}')
+        if '\n' in value or not value:
+            raise ValueError('Retrospective header values must be one nonempty line')
+        text = text.replace(placeholder, value, 1)
+    ident = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:8]
+    folder = Path(output).expanduser().resolve() / RETRO_DIR / ident
+    folder.mkdir(parents=True, exist_ok=False)
+    return new_file(folder / 'retrospective.md', text)
+
+
+def parse_retro(text):
+    """(title, header dict, {section: body}) from a retrospective; structure only, no judgment."""
+    lines = text.splitlines()
+    if not lines or not lines[0].startswith(RETRO_TITLE):
+        raise ValueError(f'First line must be "{RETRO_TITLE}<title>"')
+    title = lines[0][len(RETRO_TITLE):].strip()
+    header, sections, current = {}, {}, None
+    for line in lines[1:]:
+        if line.startswith('## '):
+            current = line[3:].strip()
+            if current in sections:
+                raise ValueError(f'Duplicate section: {current}')
+            sections[current] = []
+        elif current is None:
+            found = re.fullmatch(r'- ([^:]+):\s*(.*)', line)
+            if found:
+                header[found.group(1).strip()] = found.group(2).strip()
+        else:
+            sections[current].append(line)
+    return title, header, {name: '\n'.join(body).strip('\n') for name, body in sections.items()}
+
+
+def bullets(block):
+    return [line[2:].strip() for line in block.splitlines() if line.startswith('- ') and line[2:].strip()]
+
+
+def numbered_steps(block):
+    return [line for line in block.splitlines() if re.match(r'\d+\. \S', line)]
+
+
+def proposal_fields(block):
+    """{label: text} for the labeled parts of a Proposed change section."""
+    labels = ('Summary', 'Why') + RETRO_FIELDS
+    pattern = re.compile(r'(' + '|'.join(re.escape(label) for label in labels) + r'):\s*(.*)')
+    fields, current = {}, None
+    for line in block.splitlines():
+        found = pattern.fullmatch(line)
+        if found:
+            current = found.group(1)
+            fields[current] = [found.group(2)]
+        elif current is not None:
+            fields[current].append(line)
+    return {label: '\n'.join(value).strip() for label, value in fields.items()}
+
+
+def validate_retro(path):
+    """Errors that keep a retrospective from being filed: missing structure, unfilled placeholders, or a proposal an agent could not act on."""
+    path = Path(path).resolve(strict=True)
+    text = read(path)
+    try:
+        title, header, sections = parse_retro(text)
+    except ValueError as exc:
+        return [str(exc)]
+    errors = []
+    if not title:
+        errors.append(f'Title required after "{RETRO_TITLE}"')
+    for key in RETRO_HEADER:
+        if not header.get(key):
+            errors.append(f'Header line "- {key}:" must be present and nonempty')
+    if header.get('Mode') and header['Mode'] not in MODES:
+        errors.append(f'Mode must be one of {", ".join(MODES)}')
+    if header.get('Outcome') and header['Outcome'] not in RUN_RESULTS:
+        errors.append(f'Outcome must be one of {", ".join(RUN_RESULTS)}')
+    if list(sections) != list(RETRO_SECTIONS):
+        errors.append('Sections must be exactly, in order: ' + ', '.join(f'## {name}' for name in RETRO_SECTIONS))
+    for name in RETRO_SECTIONS[:3]:
+        if name in sections and not bullets(sections[name]):
+            errors.append(f'{name}: at least one "- " item required (write "- None observed." when there is nothing)')
+    proposal = proposal_fields(sections.get(RETRO_SECTIONS[-1], ''))
+    summary = proposal.get('Summary', '')
+    if not summary:
+        errors.append('Proposed change: a "Summary:" line is required (write exactly "No change proposed." to skip the issue)')
+    elif summary != NO_CHANGE:
+        if '\n' in summary:
+            errors.append('Summary must be one line; it becomes the issue title')
+        elif len(ISSUE_TITLE_PREFIX + summary) > ISSUE_TITLE_LIMIT:
+            errors.append(f'Summary too long for an issue title ({ISSUE_TITLE_LIMIT} characters including the prefix)')
+        if not proposal.get('Why'):
+            errors.append('Proposed change: "Why:" is required')
+        if not any('`' in item for item in bullets(proposal.get('Files to change', ''))):
+            errors.append('Files to change: at least one "- `path`: change" item required')
+        if not numbered_steps(proposal.get('Implementation steps', '')):
+            errors.append('Implementation steps: at least one numbered step required')
+        if not bullets(proposal.get('Acceptance criteria', '')):
+            errors.append('Acceptance criteria: at least one "- " item required')
+        if not [line for line in proposal.get('Validation', '').splitlines() if line.strip() and not line.startswith('```')]:
+            errors.append('Validation: at least one command required')
+        if not bullets(proposal.get('Out of scope', '')):
+            errors.append('Out of scope: at least one "- " item required (write "- None." when the change is complete as stated)')
+    for placeholder in template_placeholders():
+        if placeholder in text:
+            errors.append(f'Unfilled placeholder: {placeholder}')
+    for number, line in enumerate(text.splitlines(), 1):
+        if SECRET_PATTERN.search(line):
+            errors.append(f'Line {number} looks like a credential; remove it before filing')
+    if len(text) > ISSUE_BODY_LIMIT:
+        errors.append(f'Retrospective exceeds the {ISSUE_BODY_LIMIT} character issue body limit')
+    return errors
+
+
+def retro_issue(path):
+    """(title, body) for the GitHub issue, or None when the retrospective proposes no change."""
+    path = Path(path).resolve(strict=True)
+    errors = validate_retro(path)
+    if errors:
+        raise ValueError('Retrospective is not ready to file:\n' + '\n'.join(errors))
+    text = read(path)
+    _, header, sections = parse_retro(text)
+    proposal = proposal_fields(sections[RETRO_SECTIONS[-1]])
+    if proposal['Summary'] == NO_CHANGE:
+        return None
+    body = [proposal['Why'], '', '## Problem observed', '', sections['What went wrong'], '', '## Root causes', '', sections['Root causes'], '']
+    for field in RETRO_FIELDS:
+        body += [f'## {field}', '', proposal[field], '']
+    body += ['## Session', '', '\n'.join(f'- {key}: {header[key]}' for key in RETRO_HEADER), '',
+             '<details><summary>Full retrospective</summary>', '', text.rstrip(), '', '</details>', '',
+             f'Filed by `oas.py retro-issue` from retrospective `{path.parent.name}`. This is a proposal with a failure example; '
+             'it grants no authorization. Implement it through the development workflow with review and the validation above.']
+    rendered = '\n'.join(body) + '\n'
+    if len(rendered) > ISSUE_BODY_LIMIT:
+        raise ValueError(f'Issue body exceeds the {ISSUE_BODY_LIMIT} character limit; shorten the retrospective')
+    return ISSUE_TITLE_PREFIX + proposal['Summary'], rendered
+
+
+def repo_slug(url):
+    found = re.search(r'github\.com[:/]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?\s*$', url)
+    if not found:
+        raise ValueError(f'Not a GitHub repository URL: {url.strip()}')
+    return f'{found.group(1)}/{found.group(2)}'
+
+
+def default_repo():
+    """OWNER/NAME of this kit's own origin: a retrospective proposes a change to the agent system, not to the task's project."""
+    try:
+        result = subprocess.run(['git', '-C', str(ROOT), 'remote', 'get-url', 'origin'], capture_output=True, text=True, check=True)
+    except (OSError, subprocess.CalledProcessError):
+        raise ValueError("Could not read this repository's origin; pass --repo OWNER/NAME") from None
+    return repo_slug(result.stdout)
+
+
+def file_retro_issue(path, repo=None, labels=(RETRO_LABEL,), dry_run=False, environ=None):
+    """Open one GitHub issue for a verified retrospective through `gh`; record its URL beside the report.
+
+    Returns None when the retrospective proposes no change. A second call for the same retrospective
+    is refused by the recorded issue.json; delete that record deliberately to file again."""
+    path = Path(path).resolve(strict=True)
+    rendered = retro_issue(path)
+    if rendered is None:
+        return None
+    title, body = rendered
+    record_path = path.parent / 'issue.json'
+    body_path = path.parent / 'issue-body.md'
+    for candidate in (record_path, body_path):
+        if candidate.is_symlink():
+            raise ValueError(f'Refusing symlink: {candidate}')
+    if record_path.exists():
+        raise ValueError(f'An issue was already filed for this retrospective: {json.loads(read(record_path)).get("url")} (see {record_path})')
+    repo = default_repo() if repo is None else repo
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo):
+        raise ValueError('--repo must be OWNER/NAME')
+    if not labels or any(not isinstance(label, str) or not label.strip() for label in labels):
+        raise ValueError('Labels must be nonempty names')
+    body_path.write_text(body, encoding='utf-8')
+    cmd = [executable('gh', environ), 'issue', 'create', '--repo', repo, '--title', title, '--body-file', str(body_path)]
+    for label in labels:
+        cmd += ['--label', label]
+    if dry_run:
+        return dict(command=cmd, title=title, body_path=str(body_path), url=None)
+    if not shutil.which(cmd[0]):
+        raise ValueError('gh is not installed; install GitHub CLI and run gh auth login, or use --dry-run')
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT)
+    if result.returncode != 0:
+        raise ValueError(f'gh issue create failed ({result.returncode}): {(result.stderr or result.stdout).strip()}')
+    url = result.stdout.strip().splitlines()[-1].strip() if result.stdout.strip() else ''
+    if not re.fullmatch(r'https://github\.com/\S+/issues/\d+', url):
+        raise ValueError(f'gh did not return an issue URL: {result.stdout!r}')
+    record = dict(url=url, repo=repo, title=title, labels=list(labels), at=datetime.now(timezone.utc).isoformat(timespec='seconds'),
+                  retrospective=path.name, body=body_path.name)
+    new_file(record_path, json.dumps(record, indent=2) + '\n')
+    return record
+
+
 def bundle(mode, agent, output, task, shared=True):
     if agent not in AGENTS:
         raise ValueError('Unknown agent')
@@ -695,6 +938,11 @@ def check(skills_root=None):
     json.loads(implementor_agent({'effort': 'low'}))
     if set(json.loads(implementor_agent({'effort': 'low', 'retry': 'medium'}))) != {IMPLEMENTOR, IMPLEMENTOR_RETRY}:
         raise ValueError('The implementor retry rung must render alongside the first rung')
+    template = read(ROOT / RETRO_TEMPLATE)
+    if not template.startswith(RETRO_TITLE) or list(parse_retro(template)[2]) != list(RETRO_SECTIONS) or not template_placeholders():
+        raise ValueError('templates/retrospective.md must keep the title line, the four sections in order, and its placeholders')
+    if 'Unfilled placeholder: <task title>' not in validate_retro(ROOT / RETRO_TEMPLATE):
+        raise ValueError('The unfilled retrospective template must fail verification on its placeholders')
     sizes, over = guidance_report()
     for mode in over:
         print(f'WARNING: {mode} guidance with shared prompts is about {sizes[mode]} tokens, over the {GUIDANCE_BUDGET_TOKENS} budget; trim before every launch pays for it', file=sys.stderr)
@@ -753,6 +1001,25 @@ def main(argv=None):
     p.add_argument('--runtime-version', help='Actual harness version used for this run')
     p = sub.add_parser('report-runs', help='Cost per completed task by configuration from OUTPUT/evals/runs.jsonl')
     p.add_argument('--output', required=True, help='The .oas folder that holds evals/')
+    p = sub.add_parser('retro', help='Scaffold a session retrospective under OUTPUT/retros/<id>/retrospective.md')
+    p.add_argument('--output', required=True, help='The .oas folder')
+    p.add_argument('--title', required=True, help='What the session was for')
+    p.add_argument('--mode', required=True, choices=MODES)
+    p.add_argument('--harness', required=True, help='claude, codex, cursor, ...')
+    p.add_argument('--task', help='Task id (default: the title)')
+    p.add_argument('--model', help='Effective model@effort, or inherit')
+    p.add_argument('--workspace', help='Workspace the session ran in')
+    p.add_argument('--outcome', choices=RUN_RESULTS)
+    p.add_argument('--corrections', type=int, help='Substantive corrections by Owen')
+    p.add_argument('--cost-usd', type=float, help='Session cost as the harness reports it; omit when unknown')
+    p.add_argument('--minutes', type=float, help='Wall clock; omit when unknown')
+    p = sub.add_parser('verify-retro', help='Check a retrospective is complete and its proposal is implementation-ready')
+    p.add_argument('path')
+    p = sub.add_parser('retro-issue', help='Open a GitHub issue from a verified retrospective through gh')
+    p.add_argument('path')
+    p.add_argument('--repo', help="OWNER/NAME (default: this repository's origin)")
+    p.add_argument('--label', action='append', help=f'Label to apply; repeatable (default: {RETRO_LABEL}); it must exist in the repository')
+    p.add_argument('--dry-run', action='store_true', help='Print the title, body, and gh command without opening an issue')
     p = sub.add_parser('doctor')
     p.add_argument('mode', choices=MODES)
     p.add_argument('--workspace', default='.', help='Workspace whose launch configuration to validate')
@@ -820,6 +1087,24 @@ def main(argv=None):
             print(json.dumps(record, ensure_ascii=False))
         elif args.action == 'report-runs':
             print(report_runs(args.output))
+        elif args.action == 'retro':
+            print(new_retro(args.output, args.title, args.mode, args.harness, task=args.task, model=args.model, workspace=args.workspace,
+                            outcome=args.outcome, corrections=args.corrections, cost_usd=args.cost_usd, minutes=args.minutes))
+        elif args.action == 'verify-retro':
+            errors = validate_retro(args.path)
+            if errors:
+                print('\n'.join(errors), file=sys.stderr)
+                return 1
+            print('PASS: retrospective structure and proposal fields; the judgment in it is not assessed')
+        elif args.action == 'retro-issue':
+            record = file_retro_issue(args.path, args.repo, tuple(args.label or [RETRO_LABEL]), args.dry_run)
+            if record is None:
+                print('No issue opened: the retrospective proposes no change')
+            elif args.dry_run:
+                print(f'dry run, would run: {shlex.join(record["command"])}', file=sys.stderr)
+                print(record['title'] + '\n\n' + read(record['body_path']), end='')
+            else:
+                print(record['url'])
         elif args.action == 'preview':
             workspace = workspace_path(args.workspace)
             cmd = command(args.agent, args.mode, workspace, args.task, args.shared,

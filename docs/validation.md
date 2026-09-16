@@ -2,7 +2,7 @@
 
 Run `python3 scripts/oas.py check`, `python3 -m unittest discover -s tests -v`, and `git diff --check`. Tests use disposable fixtures and no model calls.
 
-`check` validates source configuration, role paths, workflows, evaluation scenarios, and guidance size. The suite covers native argument construction, permission boundaries, immutable concurrent role snapshots, read-only previews, exact doctor options, task evidence and compaction state, telemetry accounting, installer rollback, runtime selection, and UI state transitions. Historical tokenizer calibration is an estimate, not a new-model benchmark.
+`check` validates source configuration, role paths, workflows, evaluation scenarios, guidance size, and that the retrospective template keeps its sections and placeholders. The suite covers native argument construction, permission boundaries, immutable concurrent role snapshots, read-only previews, exact doctor options, task evidence and compaction state, telemetry accounting, installer rollback, runtime selection, retrospective verification and issue filing with a stubbed `gh`, and UI state transitions. Historical tokenizer calibration is an estimate, not a new-model benchmark.
 
 `doctor MODE --workspace PATH` accepts the same model, lead effort, worker model/effort, and retry effort options as a Codex launch. It materializes the same role snapshots and reports the selected executable. Use `OAS_CODEX_BIN` to select an installed runtime explicitly. Doctor can report inherited connector, terminal, and host warnings; inspect the individual categories. A successful parse is not proof that the TUI starts or a model request succeeds.
 

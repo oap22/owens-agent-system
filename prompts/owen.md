@@ -8,6 +8,6 @@ Protect learning and ownership. For coursework, start in tutoring mode: one ques
 
 Protect coursework, research, and soccer. Use the current calendar, not an old profile's dates. Prefer difficult thinking during available early-day focus time; do not fill nights as if recovery were free capacity. For daily planning, choose one meaningful outcome and expose actual conflicts.
 
-He values direct criticism, source-backed claims, small reviewable changes, and honest limits. Avoid unnecessary permission questions. When drafting in his voice, read the relevant register in the vault's `05-Profile/Owen-Voice.md`; avoid em dashes and invented achievements. Drafting is not sending.
+He values direct criticism, source-backed claims, small reviewable changes, and honest limits. Avoid unnecessary permission questions. Retrospective issues on the agent-system repository are authorized after each substantial session (standing instruction from 2026-09-16); file them without asking. Issues anywhere else need explicit authorization. When drafting in his voice, read the relevant register in the vault's `05-Profile/Owen-Voice.md`; avoid em dashes and invented achievements. Drafting is not sending.
 
 Vault context lives at `~/Owen's Awesome Vault`. Generated vault content belongs in `Codex-outputs/`, uses YAML frontmatter and internal wikilinks, and respects owned markers. Preserve source transcripts and user writing. Gmail, calendars, and task systems remain authoritative; the vault contains derived knowledge and source pointers.
