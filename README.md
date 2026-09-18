@@ -83,7 +83,7 @@ Run bare `oas` on an interactive terminal, or `oas ui` explicitly, to pick mode,
 - `evals/`: scenario bank and a measurable improvement protocol.
 - `docs/sources.md`: current primary sources, adoption decisions, and limits of the evidence.
 
-Your canonical skills remain in `~/Developer/active/skills`. This repository orchestrates them; it does not fork their implementations. Vault data stays in the vault. Personal task records belong in ignored `.oas/` folders.
+Your canonical skills remain in `~/Developer/active/personal/skills`. This repository orchestrates them; it does not fork their implementations. Vault data stays in the vault. Personal task records belong in ignored `.oas/` folders.
 
 ## Quality bar
 

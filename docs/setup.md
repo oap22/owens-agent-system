@@ -1,6 +1,6 @@
 # Setup and adoption
 
-1. Clone the private repository into `~/Developer/active/owens-agent-system` and install Python 3.11+ and the CLI for your chosen agent. Authenticate that agent using its normal login; no credentials belong here.
+1. Clone the private repository into `~/Developer/active/personal/owens-agent-system` and install Python 3.11+ and the CLI for your chosen agent. Authenticate that agent using its normal login; no credentials belong here.
 2. Run `python3 scripts/oas.py check` and the unit tests.
 3. Run `python3 scripts/oas.py doctor development`. Inspect errors, including inherited configuration conflicts. Do not treat a successful TOML parse as proof of runtime enforcement.
 4. Create a development worktree using the repository's workflow, or select the relevant research/ops artifact workspace. Run `preview`, inspect the assembled instruction and permission overrides, then `run`.
