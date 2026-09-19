@@ -50,7 +50,7 @@ def refuse_symlink(home, target, relative):
         raise ValueError(f'Refusing symlink target: {relative}')
 
 
-def plan(home, source):
+def plan(home, source, runtimes=None):
     home, source = Path(home).resolve(), Path(source).resolve()
     src = oas if source == ROOT else load_oas(source)
     guidance = '\n\n'.join((source / f).read_text(encoding='utf-8') for f in src.SHARED_PROMPTS)
@@ -84,14 +84,39 @@ def plan(home, source):
     patches = {
         '.claude/settings.json': {'permissions': {'disableBypassPermissionsMode':'disable'}},
         '.cursor/cli-config.json': {'sandbox': {'mode':'enabled'},'approvalMode':'allowlist'},
-        '.config/opencode/opencode.json': {'permission':{'*':'ask','read':'allow','glob':'allow','grep':'allow','list':'allow','edit':'allow','external_directory':'ask','doom_loop':'ask'}},
+        '.config/opencode/opencode.json': {
+            'permission':{'*':'ask','read':'allow','glob':'allow','grep':'allow','list':'allow','edit':'allow','external_directory':'ask','doom_loop':'ask'},
+            'compaction':{'auto':True},
+        },
     }
     for relative, patch in patches.items():
         def update(old, patch=patch):
             base = json.loads(old) if old.strip() else {}
             return json.dumps(merged(base, patch), indent=2) + '\n'
         add(relative, update)
-    wrapper = '#!/bin/sh\n# Owen agent system launcher\nexec ' + shlex.quote(sys.executable) + ' ' + shlex.quote(str(source / 'scripts/oas.py')) + ' "$@"\n'
+    # Remember explicit runtime choices across subsequent installer runs.
+    wrapper_path = home / '.local/bin/oas'
+    refuse_symlink(home, wrapper_path, '.local/bin/oas')
+    selected = {}
+    if wrapper_path.is_file():
+        for line in wrapper_path.read_text(encoding='utf-8').splitlines():
+            if line.startswith('# OAS runtimes: '):
+                selected = json.loads(line.removeprefix('# OAS runtimes: '))
+    if not isinstance(selected, dict):
+        raise ValueError('Invalid OAS runtime selections in launcher')
+    selected.update(runtimes or {})
+    wrapper = '#!/bin/sh\n# Owen agent system launcher\n'
+    if selected:
+        wrapper += '# OAS runtimes: ' + json.dumps(selected, sort_keys=True) + '\n'
+    for agent, value in sorted(selected.items()):
+        if agent not in src.GLOBAL_INSTRUCTIONS or not isinstance(value, str):
+            raise ValueError('Invalid OAS runtime selection')
+        binary = Path(value).expanduser()
+        if not binary.is_absolute() or not binary.is_file() or not os.access(binary, os.X_OK):
+            raise ValueError(f'Runtime must be an absolute executable file: {agent}')
+        variable = f'OAS_{agent.upper()}_BIN'
+        wrapper += f'if [ -z "${{{variable}:-}}" ]; then export {variable}={shlex.quote(str(binary))}; fi\n'
+    wrapper += 'exec ' + shlex.quote(sys.executable) + ' ' + shlex.quote(str(source / 'scripts/oas.py')) + ' "$@"\n'
     def launcher(old):
         if old and '# Owen agent system launcher\n' not in old:
             raise ValueError('Refusing to replace an unmanaged oas executable')
@@ -110,9 +135,17 @@ def write_atomic(target, data, mode):
         if temp.exists(): temp.unlink()
 
 
+def matches_installed(target, digest, mode=None):
+    """Older manifests have no installed mode; retain their byte-only comparison."""
+    return (not target.is_symlink() and not any(p.is_symlink() for p in target.parents)
+            and target.is_file() and (mode is None or stat.S_IMODE(target.stat().st_mode) == mode)
+            and hashlib.sha256(target.read_bytes()).hexdigest() == digest)
+
+
 def apply(changes, home):
     home = Path(home).resolve()
     for target, before, _, _ in changes:
+        refuse_symlink(home, target, target.relative_to(home))
         if (target.read_bytes() if target.exists() else None) != before:
             raise ValueError(f'File changed since planning: {target.name}')
     if not changes:
@@ -127,26 +160,41 @@ def apply(changes, home):
         if before is not None:
             dest = backup / rel; dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(before); os.chmod(dest, 0o600)
-        records.append(dict(path=str(rel), existed=before is not None, mode=mode, installed_sha256=hashlib.sha256(after).hexdigest()))
+        records.append(dict(path=str(rel), existed=before is not None, mode=mode,
+                            installed_mode=0o755 if executable else mode,
+                            installed_sha256=hashlib.sha256(after).hexdigest()))
     (backup / 'manifest.json').write_text(json.dumps(records, indent=2)+'\n', encoding='utf-8')
     done = []
     try:
         for (target,before,after,executable), record in zip(changes,records):
+            refuse_symlink(home, target, target.relative_to(home))
             if (target.read_bytes() if target.exists() else None) != before:
                 raise ValueError(f'Concurrent change: {target.name}')
             target.parent.mkdir(parents=True,exist_ok=True)
-            write_atomic(target, after, 0o755 if executable else record['mode'])
-            done.append((target,before,record['mode']))
+            write_atomic(target, after, record['installed_mode'])
+            done.append((target,before,record))
     except Exception:
-        for target,before,mode in reversed(done):
-            if before is None: target.unlink()
-            else: target.write_bytes(before); os.chmod(target,mode)
+        for target,before,record in reversed(done):
+            try:
+                refuse_symlink(home, target, target.relative_to(home))
+                if not matches_installed(target, record['installed_sha256'], record['installed_mode']):
+                    print(f'Kept concurrent change during recovery: {target}', file=sys.stderr)
+                    continue
+                if before is None:
+                    target.unlink()
+                else:
+                    write_atomic(target, before, record['mode'])
+            except (OSError, ValueError) as error:
+                # Recover other untouched writes without masking the install
+                # failure or overwriting a concurrently replaced target.
+                print(f'Could not recover {target}: {error}', file=sys.stderr)
+        print(f'Installation failed. Recovery backup: {backup}', file=sys.stderr)
         raise
     return backup
 
 
 def rollback_plan(home, backup):
-    """Return (action, target, payload) per manifest record; payload is (bytes, mode) for 'restore'."""
+    """Return (action, target, payload); restore payload is (bytes, mode, (installed digest, mode))."""
     home, backup = Path(home).resolve(), Path(backup).resolve()
     manifest = backup / 'manifest.json'
     if not manifest.is_file():
@@ -158,30 +206,42 @@ def rollback_plan(home, backup):
             raise ValueError(f'Manifest path must be relative and inside home: {rel!r}')
         target = home / rel
         refuse_symlink(home, target, rel)
+        expected = (record['installed_sha256'], record.get('installed_mode'))
         if not target.exists():
             actions.append(('absent', target, None))
+        elif not matches_installed(target, *expected):
+            actions.append(('keep', target, None))
         elif record['existed']:
             saved = backup / rel
             if not saved.is_file():
                 raise ValueError(f'Backup copy missing: {rel}')
-            actions.append(('restore', target, (saved.read_bytes(), record['mode'])))
-        elif hashlib.sha256(target.read_bytes()).hexdigest() == record['installed_sha256']:
-            actions.append(('remove', target, record['installed_sha256']))
+            actions.append(('restore', target, (saved.read_bytes(), record['mode'], expected)))
         else:
-            actions.append(('keep', target, None))
+            actions.append(('remove', target, expected))
     return actions
 
 
 def rollback_apply(actions):
     """Execute a rollback plan. The backup directory is left in place. Returns counts per action."""
     counts = {action: 0 for action in LABELS}
+    # Check the entire plan before making the first change, including restored files.
+    for action, target, payload in actions:
+        if action not in ('restore', 'remove'):
+            continue
+        if target.is_symlink() or any(p.is_symlink() for p in target.parents):
+            raise ValueError(f'Refusing symlink target: {target}')
+        expected = payload[2] if action == 'restore' else payload
+        if not matches_installed(target, *expected):
+            raise ValueError(f'File changed since planning: {target.name}')
     for action, target, payload in actions:
         if action == 'restore':
-            data, mode = payload
+            data, mode, expected = payload
+            if not matches_installed(target, *expected):
+                raise ValueError(f'File changed since planning: {target.name}')
             target.parent.mkdir(parents=True, exist_ok=True)
             write_atomic(target, data, mode)
         elif action == 'remove':
-            if hashlib.sha256(target.read_bytes()).hexdigest() != payload:
+            if not matches_installed(target, *payload):
                 raise ValueError(f'File changed since planning: {target.name}')
             target.unlink()
         counts[action] += 1
@@ -193,6 +253,8 @@ def main():
     parser.add_argument('--home',type=Path,default=Path.home())
     parser.add_argument('--source',type=Path,default=ROOT)
     parser.add_argument('--apply',action='store_true')
+    parser.add_argument('--codex-bin', help='Pin the OAS launcher to this installed Codex executable')
+    parser.add_argument('--claude-bin', help='Pin the OAS launcher to this installed Claude executable')
     parser.add_argument('--rollback',type=Path,metavar='BACKUP_DIR',help='preview (or with --apply, perform) a rollback from this backup directory instead of installing')
     args=parser.parse_args()
     home=args.home.resolve()
@@ -207,7 +269,8 @@ def main():
         return
     if args.apply and home == Path.home().resolve() and (args.source / '.git').is_file():
         parser.error('Install from the permanent checkout, not a linked worktree; use --source to select it')
-    changes=plan(home,args.source)
+    runtimes = {agent: value for agent, value in (('codex', args.codex_bin), ('claude', args.claude_bin)) if value}
+    changes=plan(home,args.source,runtimes)
     for path,_,_,_ in changes: print(path.relative_to(home))
     print(f'{len(changes)} files to update')
     if args.apply:

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import copy
 from datetime import datetime, timezone
+import hashlib
 import json
 import math
 import os
@@ -13,6 +14,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
 import uuid
 
@@ -49,6 +51,34 @@ GUIDANCE_BUDGET_TOKENS = 3500
 TOKEN_CALIBRATION = 'evals/token-calibration.json'
 RUN_RESULTS = ('pass', 'fail', 'partial')
 RUN_LOG = 'evals/runs.jsonl'
+# Session retrospectives: the report an agent writes after hand off and the issue it files from it.
+RETRO_TEMPLATE = 'templates/retrospective.md'
+RETRO_DIR = 'retros'
+RETRO_TITLE = '# Retrospective: '
+RETRO_HEADER = ('Task', 'Mode', 'Harness', 'Model and effort', 'Workspace', 'Date', 'Outcome', 'Corrections by Owen', 'Cost and time')
+RETRO_SECTIONS = ('What went well', 'What went wrong', 'Root causes', 'Proposed change')
+RETRO_FIELDS = ('Files to change', 'Implementation steps', 'Acceptance criteria', 'Validation', 'Out of scope')
+NO_CHANGE = 'No change proposed.'
+RETRO_LABEL = 'retrospective'
+ISSUE_TITLE_PREFIX = 'Retrospective: '
+ISSUE_TITLE_LIMIT = 256     # GitHub issue title limit
+ISSUE_BODY_LIMIT = 65536    # GitHub issue body limit
+# Heuristic only: shapes of common credentials that must never reach a public issue.
+SECRET_PATTERN = re.compile(r'gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY|Bearer [A-Za-z0-9._-]{20,}')
+
+
+def executable(agent, environ=None):
+    """Honor an explicit runtime selection without silently switching installations."""
+    names = {'codex': 'codex', 'claude': 'claude', 'cursor': 'cursor-agent',
+             'copilot': 'copilot', 'opencode': 'opencode', 'gh': 'gh'}
+    default = names[agent]
+    selected = (os.environ if environ is None else environ).get(f'OAS_{agent.upper()}_BIN')
+    if not selected:
+        return default
+    path = Path(selected).expanduser()
+    if not path.is_absolute() or not path.is_file() or not os.access(path, os.X_OK):
+        raise ValueError(f'OAS_{agent.upper()}_BIN must name an absolute executable file')
+    return str(path)
 
 
 def claude_auto_model_known_ineligible(model):
@@ -242,35 +272,55 @@ def implementor_agent(worker):
     return json.dumps(agents, ensure_ascii=False)
 
 
-def implementor_overlays(workspace, worker):
+def implementor_overlays(workspace, worker, materialize=True):
     """Codex [agents] overrides for every implementor rung, writing one role layer per rung."""
     registered = config('development')['agents']
     result = {}
     for name, options in worker_rungs(worker):
-        result[name] = {'config_file': str(implementor_overlay(workspace, options, name))}
+        result[name] = {'config_file': str(implementor_overlay(workspace, options, name, materialize))}
         if name not in registered:
             result[name]['description'] = rung_description(name)
     return result
 
 
-def implementor_overlay(workspace, worker, name=IMPLEMENTOR):
-    """Write the implementor role layer plus worker overrides under WORKSPACE/.oas/roles and return its path."""
-    path = Path(workspace) / '.oas/roles' / f'{name}.toml'
-    if path.is_symlink() or (path.exists() and not path.is_file()):
-        raise ValueError(f'{path} must be a regular file or absent')
-    lines = [read(ROOT / f'config/agents/{IMPLEMENTOR}.toml').rstrip(), '# Launch-time worker overrides written by scripts/oas.py; regenerated on every launch.']
+def implementor_overlay(workspace, worker, name=IMPLEMENTOR, materialize=True):
+    """An immutable role snapshot; previews calculate its path without writing it."""
+    lines = [read(ROOT / f'config/agents/{IMPLEMENTOR}.toml').rstrip(), '# Launch-time worker overrides written by scripts/oas.py.']
     if 'model' in worker:
         lines.append(f'model = {toml_value(worker["model"])}')
     if 'effort' in worker:
         lines.append(f'model_reasoning_effort = {toml_value(worker["effort"])}')
     content = '\n'.join(lines) + '\n'
     tomllib.loads(content)
+    digest = hashlib.sha256(content.encode('utf-8')).hexdigest()
+    workspace = Path(workspace)
+    path = workspace / '.oas/roles' / f'{name}-{digest}.toml'
+    for candidate in (workspace / '.oas', path.parent, path):
+        if candidate.is_symlink():
+            raise ValueError(f'Refusing symlink role path: {candidate}')
+    if path.exists():
+        if not path.is_file() or read(path) != content:
+            raise ValueError(f'Role snapshot was modified: {path}')
+        return path
+    if not materialize:
+        return path
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding='utf-8')
+    # Publish complete bytes without replacing a snapshot another launch is using.
+    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent, delete=False) as f:
+        temporary = Path(f.name)
+        f.write(content)
+    try:
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            if path.is_symlink() or not path.is_file() or read(path) != content:
+                raise ValueError(f'Role snapshot was modified: {path}') from None
+    finally:
+        temporary.unlink()
     return path
 
 
-def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=None, worker_model=None, worker_effort=None, model=None, retry_effort=None):
+def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=None, worker_model=None, worker_effort=None, model=None, retry_effort=None, materialize=True):
     workspace = workspace_path(workspace)
     if model is not None and not re.fullmatch(MODEL_PATTERN, model):
         raise ValueError('Model must be a plain alias or model identifier')
@@ -295,7 +345,7 @@ def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=
         if lead_effort:
             extra['model_reasoning_effort'] = lead_effort
         if worker:
-            extra['agents'] = implementor_overlays(workspace, worker)
+            extra['agents'] = implementor_overlays(workspace, worker, materialize)
         return ['codex', '--strict-config', *overrides(mode, extra), *model_flag, '-C', str(workspace), message]
     if agent == 'claude':
         # Claude's auto mode is the native low-friction counterpart to the
@@ -306,7 +356,12 @@ def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=
         # Guidance is system-level context for Claude Code; the raw task is the user turn.
         if task.lstrip().startswith('-'):
             raise ValueError('Claude receives the task as a positional prompt; it must not start with a dash')
-        args = ['claude', '--settings', str(ROOT / 'adapters/claude/settings.json'), '--permission-mode', native_mode, *model_flag]
+        # Make the native, model-aware compaction default explicit. Other
+        # adapters either have no launch flag or manage compaction in their own
+        # configuration; OAS documents those capabilities instead of inventing
+        # a cross-provider threshold with different semantics.
+        args = ['claude', '--settings', str(ROOT / 'adapters/claude/settings.json'), '--permission-mode', native_mode,
+                '--autocompact', 'auto', *model_flag]
         if lead_effort:
             args += ['--effort', lead_effort]
         if worker:
@@ -327,8 +382,9 @@ def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=
     return args + ['--interactive', message]
 
 
-def launch_command(agent, mode, workspace, task, shared='auto', home=None, **options):
+def launch_command(agent, mode, workspace, task, shared='auto', home=None, *, environ=None, **options):
     cmd = command(agent, mode, workspace, task, shared, home, **options)
+    cmd[0] = executable(agent, environ)
     if not shutil.which(cmd[0]):
         raise ValueError(f'{cmd[0]} is not installed; use bundle or install its official CLI')
     # Copilot supports permission-bypass environment variables. Fail closed,
@@ -340,6 +396,12 @@ def launch_command(agent, mode, workspace, task, shared='auto', home=None, **opt
 
 def launch(agent, mode, workspace, task, shared='auto', **options):
     return subprocess.call(launch_command(agent, mode, workspace, task, shared, **options), cwd=workspace_path(workspace))
+
+
+def doctor_command(mode, workspace, **options):
+    """Validate the same Codex overrides and role snapshots that a run will use."""
+    cmd = launch_command('codex', mode, workspace, DEFAULT_TASK, shared='never', **options)
+    return cmd[:-1] + ['doctor', '--summary']
 
 
 def interactive_default(argv, stdin=None, stdout=None):
@@ -383,10 +445,12 @@ def new_task(mode, output, title, criteria, scenario_id=None):
     ident = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:8]
     folder = Path(output).expanduser().resolve() / ident
     folder.mkdir(parents=True, exist_ok=False)
-    record = dict(schema_version=1, id=ident, mode=mode, title=title, status='planned',
+    record = dict(schema_version=2, id=ident, mode=mode, title=title, status='planned',
                   owner='Owen', authorized_actions=[], writable_scope=[],
                   criteria=[dict(description=c, passed=False, evidence=[]) for c in criteria],
-                  checkpoint=dict(completed=[], blockers=[], next_action='Confirm scope and begin', commit=None),
+                  checkpoint=dict(phase='frame', completed=[], blockers=[], next_action='Confirm scope and begin',
+                                  commit=None, worktree=None, owned_files=[], changed_files=[], evidence_paths=[],
+                                  reverify=[], cursor=None, iteration=0, retries_used=0),
                   budget=dict(max_minutes=None, max_iterations=None),
                   idempotency_key=ident, retry_limit=0)
     if scenario_id is not None:
@@ -407,7 +471,8 @@ def validate_task(path):
             errors.append(f'{field} must be a nonempty string')
     if 'scenario' in data and (not isinstance(data['scenario'], str) or not data['scenario'].strip()):
         errors.append('scenario must be a nonempty string when present')
-    if data.get('schema_version') != 1 or data.get('mode') not in MODES:
+    schema_version = data.get('schema_version')
+    if type(schema_version) is not int or schema_version not in (1, 2) or data.get('mode') not in MODES:
         errors.append('Unsupported schema or mode')
     if data.get('status') not in ('planned', 'active', 'blocked', 'complete'):
         errors.append('Invalid status')
@@ -416,6 +481,8 @@ def validate_task(path):
         return errors + ['Nonempty criteria list required']
     complete = data.get('status') == 'complete'
     if data.get('mode') == 'unattended' and data.get('status') != 'planned':
+        if schema_version == 1:
+            errors.append('Active unattended task requires schema version 2 continuity state')
         for field in ('authorized_actions', 'writable_scope'):
             values = data.get(field)
             if not isinstance(values, list) or not values or any(not isinstance(v, str) or not v.strip() for v in values):
@@ -456,6 +523,41 @@ def validate_task(path):
         errors.append('Checkpoint with blockers list required')
     elif complete and checkpoint['blockers']:
         errors.append('Complete task still has blockers')
+    if schema_version == 2 and isinstance(checkpoint, dict):
+        for field in ('phase', 'next_action'):
+            if not isinstance(checkpoint.get(field), str) or not checkpoint[field].strip():
+                errors.append(f'Checkpoint {field} must be a nonempty string')
+        for field in ('completed', 'blockers', 'owned_files', 'changed_files', 'evidence_paths', 'reverify'):
+            values = checkpoint.get(field)
+            if not isinstance(values, list) or any(not isinstance(v, str) or not v.strip() for v in values):
+                errors.append(f'Checkpoint {field} must be a string list')
+        for field in ('commit', 'worktree', 'cursor'):
+            if field not in checkpoint:
+                errors.append(f'Checkpoint {field} is required')
+                continue
+            value = checkpoint.get(field)
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                errors.append(f'Checkpoint {field} must be null or a nonempty string')
+        for field in ('iteration', 'retries_used'):
+            value = checkpoint.get(field)
+            if type(value) is not int or value < 0:
+                errors.append(f'Checkpoint {field} must be a nonnegative integer')
+        checkpoint_evidence = checkpoint.get('evidence_paths')
+        for item in checkpoint_evidence if isinstance(checkpoint_evidence, list) else []:
+            if not isinstance(item, str) or not item.strip():
+                continue
+            candidate = (path.parent / item).resolve()
+            if Path(item).is_absolute() or not candidate.is_relative_to(path.parent):
+                errors.append('Checkpoint evidence must stay inside task directory')
+            elif not candidate.is_file() or candidate.stat().st_size == 0:
+                errors.append('Checkpoint evidence artifact is missing or empty')
+        if data.get('mode') == 'unattended' and data.get('status') != 'planned':
+            if type(checkpoint.get('retries_used')) is int and type(data.get('retry_limit')) is int and checkpoint['retries_used'] > data['retry_limit']:
+                errors.append('Checkpoint retries exceed retry limit')
+            budget = data.get('budget')
+            if (isinstance(budget, dict) and type(checkpoint.get('iteration')) is int
+                    and type(budget.get('max_iterations')) is int and checkpoint['iteration'] > budget['max_iterations']):
+                errors.append('Checkpoint iteration exceeds task budget')
     return errors
 
 
@@ -482,7 +584,7 @@ def log_run(output, **fields):
         fields[key] = value
     for key in ('cost_usd', 'minutes'):
         value = fields.get(key)
-        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0):
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0):
             raise ValueError(f'{key} must be a nonnegative number or omitted when unknown')
         fields[key] = None if value is None else float(value)
     if fields['escalated'] > fields['packets']:
@@ -491,6 +593,11 @@ def log_run(output, **fields):
     for key in ('task', 'harness', 'mode', 'lead_model', 'lead_effort', 'worker_model', 'worker_effort', 'retry_effort',
                 'packets', 'escalated', 'result', 'cost_usd', 'minutes', 'corrections', 'notes'):
         record[key] = fields.get(key)
+    for key in ('cohort', 'runtime_version'):
+        value = fields.get(key)
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ValueError(f'{key} must be nonempty text when provided')
+        record[key] = value
     path = Path(output).expanduser().resolve() / RUN_LOG
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('a', encoding='utf-8') as f:
@@ -499,14 +606,23 @@ def log_run(output, **fields):
 
 
 def configuration_key(record):
-    """The launch configuration a run was made under, as one comparable string."""
+    """Keep configuration identity separate from its human-readable label."""
+    return tuple(record.get(field) for field in (
+        'mode', 'cohort', 'harness', 'runtime_version', 'lead_model', 'lead_effort',
+        'worker_model', 'worker_effort', 'retry_effort'))
+
+
+def configuration_label(record):
     lead = f"{record.get('lead_model') or 'inherit'}@{record.get('lead_effort') or 'default'}"
+    prefix = f'{record.get("mode", "unknown")} / {record.get("cohort") or "unspecified"} / {record["harness"]}'
+    if record.get('runtime_version'):
+        prefix += f' [runtime {record["runtime_version"]}]'
     if not record.get('worker_model') and not record.get('worker_effort'):
-        return f'{record["harness"]} lead {lead} alone'
+        return f'{prefix} lead {lead} alone'
     worker = f"{record.get('worker_model') or 'inherit'}@{record.get('worker_effort') or 'default'}"
     if record.get('retry_effort'):
         worker += f"->{record['retry_effort']}"
-    return f'{record["harness"]} lead {lead} worker {worker}'
+    return f'{prefix} lead {lead} worker {worker}'
 
 
 def report_runs(output):
@@ -517,10 +633,12 @@ def report_runs(output):
         if not line.strip():
             continue
         record = json.loads(line)
-        row = groups.setdefault(configuration_key(record), dict(runs=0, passes=0, cost=0.0, costed=0, unknown=0, packets=0, escalated=0, corrections=0))
+        row = groups.setdefault(configuration_key(record), dict(label=configuration_label(record), runs=0, completed=set(), cost=0.0, costed=0, unknown=0, packets=0, escalated=0, corrections=0))
         row['runs'] += 1
-        row['passes'] += record.get('result') == 'pass'
-        if record.get('cost_usd') is None:
+        if record.get('result') == 'pass':
+            row['completed'].add(record['task'])
+        cost = record.get('cost_usd')
+        if cost is None or isinstance(cost, bool) or not isinstance(cost, (float, int)) or not math.isfinite(cost) or cost < 0:
             row['unknown'] += 1
         else:
             row['cost'] += record['cost_usd']
@@ -528,17 +646,247 @@ def report_runs(output):
         row['packets'] += record.get('packets') or 0
         row['escalated'] += record.get('escalated') or 0
         row['corrections'] += record.get('corrections') or 0
-    lines = ['configuration | runs | passes | usd per completed task | runs without cost | packets escalated | corrections']
-    for key, row in sorted(groups.items()):
+    lines = ['configuration | runs | completed tasks | usd per completed task | runs without cost | packets escalated | corrections']
+    for row in sorted(groups.values(), key=lambda row: row['label']):
         # Cost per completed task: everything spent under the configuration, divided by the tasks it completed.
-        if row['unknown'] or not row['passes']:
+        completed = len(row['completed'])
+        if row['unknown'] or not completed:
             per_pass = 'unknown'
         else:
-            per_pass = f"{row['cost'] / row['passes']:.2f}"
-        lines.append(f"{key} | {row['runs']} | {row['passes']} | {per_pass} | {row['unknown']} | {row['escalated']}/{row['packets']} | {row['corrections']}")
+            per_pass = f"{row['cost'] / completed:.2f}"
+        lines.append(f"{row['label']} | {row['runs']} | {completed} | {per_pass} | {row['unknown']} | {row['escalated']}/{row['packets']} | {row['corrections']}")
     if len(lines) == 1:
         lines.append('no runs recorded')
     return '\n'.join(lines)
+
+
+def template_placeholders():
+    """Angle-bracket placeholders in the retrospective template; a report may not still contain them."""
+    return sorted(set(re.findall(r'<[^<>\n`]+>', read(ROOT / RETRO_TEMPLATE))))
+
+
+def new_retro(output, title, mode, harness, task=None, model=None, workspace=None, outcome=None, corrections=None, cost_usd=None, minutes=None):
+    """Scaffold OUTPUT/retros/<id>/retrospective.md from the template with the known session facts filled in.
+
+    Facts not given stay as placeholders so `verify-retro` refuses the report until the lead fills them."""
+    if mode not in MODES:
+        raise ValueError('Unknown mode')
+    if not isinstance(title, str) or not title.strip() or not isinstance(harness, str) or not harness.strip():
+        raise ValueError('Retrospective requires a nonempty title and harness')
+    if outcome is not None and outcome not in RUN_RESULTS:
+        raise ValueError(f'outcome must be one of {", ".join(RUN_RESULTS)}')
+    if corrections is not None and (type(corrections) is not int or corrections < 0):
+        raise ValueError('corrections must be a nonnegative integer')
+    for name, value in (('cost_usd', cost_usd), ('minutes', minutes)):
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0):
+            raise ValueError(f'{name} must be a nonnegative number or omitted when unknown')
+    fills = {'<task title>': title.strip(), '<task id or short title>': (task or title).strip(), '<development | research | ops | tutor | unattended>': mode,
+             '<claude | codex | cursor | copilot | opencode>': harness.strip(), '<YYYY-MM-DD>': datetime.now(timezone.utc).strftime('%Y-%m-%d')}
+    if model is not None:
+        fills['<model@effort or inherit>'] = model.strip()
+    if workspace is not None:
+        fills['<absolute path>'] = str(workspace).strip()
+    if outcome is not None:
+        fills['<pass | partial | fail>'] = outcome
+    if corrections is not None:
+        fills['<count>'] = str(corrections)
+    if cost_usd is not None:
+        fills['<usd or unknown>'] = f'{float(cost_usd):.2f}'
+    if minutes is not None:
+        fills['<minutes or unknown>'] = f'{float(minutes):g}'
+    text = read(ROOT / RETRO_TEMPLATE)
+    for placeholder, value in fills.items():
+        if placeholder not in text:
+            raise ValueError(f'templates/retrospective.md no longer carries {placeholder}')
+        if '\n' in value or not value:
+            raise ValueError('Retrospective header values must be one nonempty line')
+        text = text.replace(placeholder, value, 1)
+    ident = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:8]
+    folder = Path(output).expanduser().resolve() / RETRO_DIR / ident
+    folder.mkdir(parents=True, exist_ok=False)
+    return new_file(folder / 'retrospective.md', text)
+
+
+def parse_retro(text):
+    """(title, header dict, {section: body}) from a retrospective; structure only, no judgment."""
+    lines = text.splitlines()
+    if not lines or not lines[0].startswith(RETRO_TITLE):
+        raise ValueError(f'First line must be "{RETRO_TITLE}<title>"')
+    title = lines[0][len(RETRO_TITLE):].strip()
+    header, sections, current = {}, {}, None
+    for line in lines[1:]:
+        if line.startswith('## '):
+            current = line[3:].strip()
+            if current in sections:
+                raise ValueError(f'Duplicate section: {current}')
+            sections[current] = []
+        elif current is None:
+            found = re.fullmatch(r'- ([^:]+):\s*(.*)', line)
+            if found:
+                header[found.group(1).strip()] = found.group(2).strip()
+        else:
+            sections[current].append(line)
+    return title, header, {name: '\n'.join(body).strip('\n') for name, body in sections.items()}
+
+
+def bullets(block):
+    return [line[2:].strip() for line in block.splitlines() if line.startswith('- ') and line[2:].strip()]
+
+
+def numbered_steps(block):
+    return [line for line in block.splitlines() if re.match(r'\d+\. \S', line)]
+
+
+def proposal_fields(block):
+    """{label: text} for the labeled parts of a Proposed change section."""
+    labels = ('Summary', 'Why') + RETRO_FIELDS
+    pattern = re.compile(r'(' + '|'.join(re.escape(label) for label in labels) + r'):\s*(.*)')
+    fields, current = {}, None
+    for line in block.splitlines():
+        found = pattern.fullmatch(line)
+        if found:
+            current = found.group(1)
+            fields[current] = [found.group(2)]
+        elif current is not None:
+            fields[current].append(line)
+    return {label: '\n'.join(value).strip() for label, value in fields.items()}
+
+
+def validate_retro(path):
+    """Errors that keep a retrospective from being filed: missing structure, unfilled placeholders, or a proposal an agent could not act on."""
+    path = Path(path).resolve(strict=True)
+    text = read(path)
+    try:
+        title, header, sections = parse_retro(text)
+    except ValueError as exc:
+        return [str(exc)]
+    errors = []
+    if not title:
+        errors.append(f'Title required after "{RETRO_TITLE}"')
+    for key in RETRO_HEADER:
+        if not header.get(key):
+            errors.append(f'Header line "- {key}:" must be present and nonempty')
+    if header.get('Mode') and header['Mode'] not in MODES:
+        errors.append(f'Mode must be one of {", ".join(MODES)}')
+    if header.get('Outcome') and header['Outcome'] not in RUN_RESULTS:
+        errors.append(f'Outcome must be one of {", ".join(RUN_RESULTS)}')
+    if list(sections) != list(RETRO_SECTIONS):
+        errors.append('Sections must be exactly, in order: ' + ', '.join(f'## {name}' for name in RETRO_SECTIONS))
+    for name in RETRO_SECTIONS[:3]:
+        if name in sections and not bullets(sections[name]):
+            errors.append(f'{name}: at least one "- " item required (write "- None observed." when there is nothing)')
+    proposal = proposal_fields(sections.get(RETRO_SECTIONS[-1], ''))
+    summary = proposal.get('Summary', '')
+    if not summary:
+        errors.append('Proposed change: a "Summary:" line is required (write exactly "No change proposed." to skip the issue)')
+    elif summary != NO_CHANGE:
+        if '\n' in summary:
+            errors.append('Summary must be one line; it becomes the issue title')
+        elif len(ISSUE_TITLE_PREFIX + summary) > ISSUE_TITLE_LIMIT:
+            errors.append(f'Summary too long for an issue title ({ISSUE_TITLE_LIMIT} characters including the prefix)')
+        if not proposal.get('Why'):
+            errors.append('Proposed change: "Why:" is required')
+        if not any('`' in item for item in bullets(proposal.get('Files to change', ''))):
+            errors.append('Files to change: at least one "- `path`: change" item required')
+        if not numbered_steps(proposal.get('Implementation steps', '')):
+            errors.append('Implementation steps: at least one numbered step required')
+        if not bullets(proposal.get('Acceptance criteria', '')):
+            errors.append('Acceptance criteria: at least one "- " item required')
+        if not [line for line in proposal.get('Validation', '').splitlines() if line.strip() and not line.startswith('```')]:
+            errors.append('Validation: at least one command required')
+        if not bullets(proposal.get('Out of scope', '')):
+            errors.append('Out of scope: at least one "- " item required (write "- None." when the change is complete as stated)')
+    for placeholder in template_placeholders():
+        if placeholder in text:
+            errors.append(f'Unfilled placeholder: {placeholder}')
+    for number, line in enumerate(text.splitlines(), 1):
+        if SECRET_PATTERN.search(line):
+            errors.append(f'Line {number} looks like a credential; remove it before filing')
+    if len(text) > ISSUE_BODY_LIMIT:
+        errors.append(f'Retrospective exceeds the {ISSUE_BODY_LIMIT} character issue body limit')
+    return errors
+
+
+def retro_issue(path):
+    """(title, body) for the GitHub issue, or None when the retrospective proposes no change."""
+    path = Path(path).resolve(strict=True)
+    errors = validate_retro(path)
+    if errors:
+        raise ValueError('Retrospective is not ready to file:\n' + '\n'.join(errors))
+    text = read(path)
+    _, header, sections = parse_retro(text)
+    proposal = proposal_fields(sections[RETRO_SECTIONS[-1]])
+    if proposal['Summary'] == NO_CHANGE:
+        return None
+    body = [proposal['Why'], '', '## Problem observed', '', sections['What went wrong'], '', '## Root causes', '', sections['Root causes'], '']
+    for field in RETRO_FIELDS:
+        body += [f'## {field}', '', proposal[field], '']
+    body += ['## Session', '', '\n'.join(f'- {key}: {header[key]}' for key in RETRO_HEADER), '',
+             '<details><summary>Full retrospective</summary>', '', text.rstrip(), '', '</details>', '',
+             f'Filed by `oas.py retro-issue` from retrospective `{path.parent.name}`. This is a proposal with a failure example; '
+             'it grants no authorization. Implement it through the development workflow with review and the validation above.']
+    rendered = '\n'.join(body) + '\n'
+    if len(rendered) > ISSUE_BODY_LIMIT:
+        raise ValueError(f'Issue body exceeds the {ISSUE_BODY_LIMIT} character limit; shorten the retrospective')
+    return ISSUE_TITLE_PREFIX + proposal['Summary'], rendered
+
+
+def repo_slug(url):
+    found = re.search(r'github\.com[:/]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?\s*$', url)
+    if not found:
+        raise ValueError(f'Not a GitHub repository URL: {url.strip()}')
+    return f'{found.group(1)}/{found.group(2)}'
+
+
+def default_repo():
+    """OWNER/NAME of this kit's own origin: a retrospective proposes a change to the agent system, not to the task's project."""
+    try:
+        result = subprocess.run(['git', '-C', str(ROOT), 'remote', 'get-url', 'origin'], capture_output=True, text=True, check=True)
+    except (OSError, subprocess.CalledProcessError):
+        raise ValueError("Could not read this repository's origin; pass --repo OWNER/NAME") from None
+    return repo_slug(result.stdout)
+
+
+def file_retro_issue(path, repo=None, labels=(RETRO_LABEL,), dry_run=False, environ=None):
+    """Open one GitHub issue for a verified retrospective through `gh`; record its URL beside the report.
+
+    Returns None when the retrospective proposes no change. A second call for the same retrospective
+    is refused by the recorded issue.json; delete that record deliberately to file again."""
+    path = Path(path).resolve(strict=True)
+    rendered = retro_issue(path)
+    if rendered is None:
+        return None
+    title, body = rendered
+    record_path = path.parent / 'issue.json'
+    body_path = path.parent / 'issue-body.md'
+    for candidate in (record_path, body_path):
+        if candidate.is_symlink():
+            raise ValueError(f'Refusing symlink: {candidate}')
+    if record_path.exists():
+        raise ValueError(f'An issue was already filed for this retrospective: {json.loads(read(record_path)).get("url")} (see {record_path})')
+    repo = default_repo() if repo is None else repo
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo):
+        raise ValueError('--repo must be OWNER/NAME')
+    if not labels or any(not isinstance(label, str) or not label.strip() for label in labels):
+        raise ValueError('Labels must be nonempty names')
+    body_path.write_text(body, encoding='utf-8')
+    cmd = [executable('gh', environ), 'issue', 'create', '--repo', repo, '--title', title, '--body-file', str(body_path)]
+    for label in labels:
+        cmd += ['--label', label]
+    if dry_run:
+        return dict(command=cmd, title=title, body_path=str(body_path), url=None)
+    if not shutil.which(cmd[0]):
+        raise ValueError('gh is not installed; install GitHub CLI and run gh auth login, or use --dry-run')
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT)
+    if result.returncode != 0:
+        raise ValueError(f'gh issue create failed ({result.returncode}): {(result.stderr or result.stdout).strip()}')
+    url = result.stdout.strip().splitlines()[-1].strip() if result.stdout.strip() else ''
+    if not re.fullmatch(r'https://github\.com/\S+/issues/\d+', url):
+        raise ValueError(f'gh did not return an issue URL: {result.stdout!r}')
+    record = dict(url=url, repo=repo, title=title, labels=list(labels), at=datetime.now(timezone.utc).isoformat(timespec='seconds'),
+                  retrospective=path.name, body=body_path.name)
+    new_file(record_path, json.dumps(record, indent=2) + '\n')
+    return record
 
 
 def bundle(mode, agent, output, task, shared=True):
@@ -590,10 +938,15 @@ def check(skills_root=None):
     json.loads(implementor_agent({'effort': 'low'}))
     if set(json.loads(implementor_agent({'effort': 'low', 'retry': 'medium'}))) != {IMPLEMENTOR, IMPLEMENTOR_RETRY}:
         raise ValueError('The implementor retry rung must render alongside the first rung')
+    template = read(ROOT / RETRO_TEMPLATE)
+    if not template.startswith(RETRO_TITLE) or list(parse_retro(template)[2]) != list(RETRO_SECTIONS) or not template_placeholders():
+        raise ValueError('templates/retrospective.md must keep the title line, the four sections in order, and its placeholders')
+    if 'Unfilled placeholder: <task title>' not in validate_retro(ROOT / RETRO_TEMPLATE):
+        raise ValueError('The unfilled retrospective template must fail verification on its placeholders')
     sizes, over = guidance_report()
     for mode in over:
         print(f'WARNING: {mode} guidance with shared prompts is about {sizes[mode]} tokens, over the {GUIDANCE_BUDGET_TOKENS} budget; trim before every launch pays for it', file=sys.stderr)
-    skills_root = Path.home() / 'Developer/active/skills/skills' if skills_root is None else Path(skills_root)
+    skills_root = Path.home() / 'Developer/active/personal/skills/skills' if skills_root is None else Path(skills_root)
     if skills_root.is_dir():
         for name in sorted(routed_skills()):
             if not (skills_root / name).is_dir():
@@ -604,11 +957,24 @@ def check(skills_root=None):
     print(f'PASS: {len(MODES)} profiles, {len(roles)} roles, {len(items)} evaluation scenarios; largest guidance about {largest} tokens')
 
 
+def launch_options(parser):
+    parser.add_argument('--model', help='Session model alias or id; omit to inherit your current default')
+    parser.add_argument('--lead-effort', choices=EFFORTS, help='Lead reasoning effort (codex and claude only)')
+    parser.add_argument('--worker-model', help='Implementor model (codex and claude only)')
+    parser.add_argument('--worker-effort', choices=EFFORTS, help='Implementor reasoning effort (codex and claude only)')
+    parser.add_argument('--worker-retry-effort', choices=EFFORTS, help='Higher effort for one implementor retry')
+
+
+def selected_options(args):
+    return dict(model=args.model, lead_effort=args.lead_effort, worker_model=args.worker_model,
+                worker_effort=args.worker_effort, retry_effort=args.worker_retry_effort)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='action', required=True)
     p = sub.add_parser('check')
-    p.add_argument('--skills-root', help='Skills directory for routing drift check (default: ~/Developer/active/skills/skills)')
+    p.add_argument('--skills-root', help='Skills directory for routing drift check (default: ~/Developer/active/personal/skills/skills)')
     for name in ('preview', 'run'):
         p = sub.add_parser(name)
         p.add_argument('mode', choices=MODES)
@@ -616,11 +982,7 @@ def main(argv=None):
         p.add_argument('--workspace', required=True)
         p.add_argument('--task', required=True)
         p.add_argument('--shared', choices=SHARED_CHOICES, default='auto', help='Include shared prompts; auto omits them when the agent\'s global instructions carry them')
-        p.add_argument('--model', help='Session model alias or id for the agent; omit to inherit your current default')
-        p.add_argument('--lead-effort', choices=EFFORTS, help='Reasoning effort for the lead session (codex and claude only)')
-        p.add_argument('--worker-model', help='Model alias or identifier for the implementor role (codex and claude only)')
-        p.add_argument('--worker-effort', choices=EFFORTS, help='Reasoning effort for the implementor role (codex and claude only)')
-        p.add_argument('--worker-retry-effort', choices=EFFORTS, help='Define an implementor-retry rung at this higher effort, same model, for one re-send of a failed packet')
+        launch_options(p)
     p = sub.add_parser('log-run', help='Append one completed-task run to OUTPUT/evals/runs.jsonl')
     p.add_argument('--output', required=True, help='The .oas folder that holds evals/')
     p.add_argument('--task', required=True, help='Task id or short title')
@@ -635,10 +997,33 @@ def main(argv=None):
     p.add_argument('--minutes', type=float, help='Wall clock; omit when unknown')
     p.add_argument('--corrections', type=int, default=0, help='Substantive corrections by Owen')
     p.add_argument('--notes')
+    p.add_argument('--cohort', help='Fixed evaluation task suite and revision for comparable runs')
+    p.add_argument('--runtime-version', help='Actual harness version used for this run')
     p = sub.add_parser('report-runs', help='Cost per completed task by configuration from OUTPUT/evals/runs.jsonl')
     p.add_argument('--output', required=True, help='The .oas folder that holds evals/')
+    p = sub.add_parser('retro', help='Scaffold a session retrospective under OUTPUT/retros/<id>/retrospective.md')
+    p.add_argument('--output', required=True, help='The .oas folder')
+    p.add_argument('--title', required=True, help='What the session was for')
+    p.add_argument('--mode', required=True, choices=MODES)
+    p.add_argument('--harness', required=True, help='claude, codex, cursor, ...')
+    p.add_argument('--task', help='Task id (default: the title)')
+    p.add_argument('--model', help='Effective model@effort, or inherit')
+    p.add_argument('--workspace', help='Workspace the session ran in')
+    p.add_argument('--outcome', choices=RUN_RESULTS)
+    p.add_argument('--corrections', type=int, help='Substantive corrections by Owen')
+    p.add_argument('--cost-usd', type=float, help='Session cost as the harness reports it; omit when unknown')
+    p.add_argument('--minutes', type=float, help='Wall clock; omit when unknown')
+    p = sub.add_parser('verify-retro', help='Check a retrospective is complete and its proposal is implementation-ready')
+    p.add_argument('path')
+    p = sub.add_parser('retro-issue', help='Open a GitHub issue from a verified retrospective through gh')
+    p.add_argument('path')
+    p.add_argument('--repo', help="OWNER/NAME (default: this repository's origin)")
+    p.add_argument('--label', action='append', help=f'Label to apply; repeatable (default: {RETRO_LABEL}); it must exist in the repository')
+    p.add_argument('--dry-run', action='store_true', help='Print the title, body, and gh command without opening an issue')
     p = sub.add_parser('doctor')
     p.add_argument('mode', choices=MODES)
+    p.add_argument('--workspace', default='.', help='Workspace whose launch configuration to validate')
+    launch_options(p)
     p = sub.add_parser('export', help='Export Codex settings without overwriting')
     p.add_argument('mode', choices=MODES)
     p.add_argument('--output', required=True)
@@ -682,7 +1067,10 @@ def main(argv=None):
             tomllib.loads(content)
             print(new_file(args.output, content))
         elif args.action == 'doctor':
-            return subprocess.call(['codex', '--strict-config', *overrides(args.mode), 'doctor', '--summary'], cwd=ROOT)
+            workspace = workspace_path(args.workspace)
+            cmd = doctor_command(args.mode, workspace, **selected_options(args))
+            print(f'Codex executable: {shutil.which(cmd[0]) or cmd[0]}', file=sys.stderr, flush=True)
+            return subprocess.call(cmd, cwd=workspace)
         elif args.action == 'ui':
             _here = Path(__file__).resolve().parent
             if str(_here) not in sys.path:
@@ -694,24 +1082,43 @@ def main(argv=None):
                              lead_model=args.lead_model, lead_effort=args.lead_effort, worker_model=args.worker_model,
                              worker_effort=args.worker_effort, retry_effort=args.retry_effort, packets=args.packets,
                              escalated=args.escalated, cost_usd=args.cost_usd, minutes=args.minutes,
-                             corrections=args.corrections, notes=args.notes)
+                             corrections=args.corrections, notes=args.notes, cohort=args.cohort,
+                             runtime_version=args.runtime_version)
             print(json.dumps(record, ensure_ascii=False))
         elif args.action == 'report-runs':
             print(report_runs(args.output))
+        elif args.action == 'retro':
+            print(new_retro(args.output, args.title, args.mode, args.harness, task=args.task, model=args.model, workspace=args.workspace,
+                            outcome=args.outcome, corrections=args.corrections, cost_usd=args.cost_usd, minutes=args.minutes))
+        elif args.action == 'verify-retro':
+            errors = validate_retro(args.path)
+            if errors:
+                print('\n'.join(errors), file=sys.stderr)
+                return 1
+            print('PASS: retrospective structure and proposal fields; the judgment in it is not assessed')
+        elif args.action == 'retro-issue':
+            record = file_retro_issue(args.path, args.repo, tuple(args.label or [RETRO_LABEL]), args.dry_run)
+            if record is None:
+                print('No issue opened: the retrospective proposes no change')
+            elif args.dry_run:
+                print(f'dry run, would run: {shlex.join(record["command"])}', file=sys.stderr)
+                print(record['title'] + '\n\n' + read(record['body_path']), end='')
+            else:
+                print(record['url'])
         elif args.action == 'preview':
             workspace = workspace_path(args.workspace)
             cmd = command(args.agent, args.mode, workspace, args.task, args.shared,
-                          lead_effort=args.lead_effort, worker_model=args.worker_model, worker_effort=args.worker_effort,
-                          model=args.model, retry_effort=args.worker_retry_effort)
+                          materialize=False, **selected_options(args))
+            cmd[0] = executable(args.agent)
             include, reason = shared_decision(args.agent, args.shared)
             print(f'shared guidance {"included" if include else "omitted"}: {reason}', file=sys.stderr)
             sizes = prompt_sizes(args.mode, args.task or DEFAULT_TASK, include)
             print(f'estimated tokens sent: guidance {sizes["guidance"]}, task {sizes["task"]} (characters/{CHARS_PER_TOKEN}; the harness adds its own system prompt and tools)', file=sys.stderr)
+            if args.agent == 'codex' and (args.worker_model or args.worker_effort):
+                print('Role snapshot paths are planned only; use run or doctor to create them.', file=sys.stderr)
             print(shlex.join(cmd))
         else:
-            return launch(args.agent, args.mode, args.workspace, args.task, args.shared,
-                          lead_effort=args.lead_effort, worker_model=args.worker_model, worker_effort=args.worker_effort,
-                          model=args.model, retry_effort=args.worker_retry_effort)
+            return launch(args.agent, args.mode, args.workspace, args.task, args.shared, **selected_options(args))
     except (ValueError, OSError) as exc:
         print(f'ERROR: {exc}', file=sys.stderr)
         return 2

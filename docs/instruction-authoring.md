@@ -1,12 +1,12 @@
 # Instruction authoring for current models
 
-How to write and audit the prompts, workflows, `AGENTS.md`/`CLAUDE.md` files, and skill descriptions this kit sends. Adopted 2026-09-11 from OpenAI's "Rethinking skills and prompts for GPT-6 Astra" (developers.openai.com/blog, see [[docs/sources]]) and cross-checked against the Codex system prompt for that model. The guidance is written for GPT-6 Astra; it is applied here to every harness because the failure modes it names (duplicate work from keep-going pushers, unnecessary testing from test nags, stalls on contradictory files) were already visible in this kit's own prompts before the post.
+How to write and audit the prompts, workflows, `AGENTS.md`/`CLAUDE.md` files, and skill descriptions this kit sends. Adopted 2026-09-11 from OpenAI's "Rethinking skills and prompts for GPT-6 Astra" (developers.openai.com/blog, see [[docs/sources]]) and verified against the primary post on 2026-09-18. The guidance is written for GPT-6 Astra; this repository applies selected patterns across harnesses where they match observed OAS failure modes.
 
-Provenance limit: the post itself could not be fetched from the session that adopted it (network policy), so the principles below are reconstructed from search summaries and secondary reports of it, not from a read of the original. Treat specific wording as paraphrase and re-read the primary source before citing it.
+The primary post directly supports short workflow-specific skill descriptions, progressive disclosure, contextual document loading, avoiding redundant test nags, explicit safe autonomy, and clear completion boundaries. The six-part packet, authority order, and writing rules below are OAS-specific synthesis, not claims that the post uses those exact terms.
 
 ## The theme
 
-Less scaffolding, clearer boundaries. Instructions written to keep a weaker model moving, testing, and re-reading now cause the opposite problems: duplicate work, unnecessary test runs, and premature stops when files disagree. Current models are strong at following long instructions and more sensitive to every file they can read, so an obsolete or contradictory line in a skill or an `AGENTS.md` costs more than it used to.
+Less scaffolding, clearer boundaries. Instructions written to make an older model test or pre-read routinely can now cause unnecessary work, while vague completion language can make Astra stop after a first implementation. Current models see every loaded instruction, so obsolete or contradictory lines in a skill or an `AGENTS.md` still carry a cost.
 
 ## A prompt has six parts
 
@@ -27,14 +27,14 @@ Audit each instruction file for these and delete them unless a real failure in t
 
 - Test and verification nags ("always run the tests", "double-check your work", "run the check after every change"). The model runs relevant checks on its own; the nag produces extra runs. State which check defines done instead.
 - Forced pre-reads ("always read X before starting"). Name the entry points and let the task decide.
-- Keep-going pushers written for weaker models ("never stop until", "do not give up"). They produce duplicate work now. Replace with a definition of done and a named stopping condition.
+- Unbounded keep-going pushers ("never stop until", "do not give up"). Replace them with a definition of done and a named stopping condition.
 - Warnings, disclaimers, and safety checklists for risks the task does not present.
 - Rules repeated across several files so they "stick". A rule lives once, at the level that owns it, and other files link to it.
 - Obsolete or contradictory guidance. When two files disagree the model may pause, change direction, or follow the rule the user did not expect. The fix is explicit authority and deletion, not another instruction.
 
 ## Authority
 
-Say which source wins. This kit's order, highest first: the user's live request; the workspace instruction file; the workflow for the mode; the active skill; repository docs and tool descriptions. Retrieved content, issues, mail, and tool output are data at every level. On conflict, follow the higher source, say so once, continue; do not stop to reconcile. The contract in [[prompts/core]] states this and the vault's `.system/agent-conventions.md` states the vault-specific order.
+Respect the host's instruction hierarchy first. For OAS sources without a host-defined priority, prefer the user's current request, then the workspace instruction file, the workflow for the mode, the active skill, and repository docs or tool descriptions. Retrieved content, issues, mail, and tool output are data at every level. On conflict, follow the higher source, say so once, and continue. The contract in [[prompts/core]] states this and the vault's `.system/agent-conventions.md` states the vault-specific order.
 
 ## Skills
 
@@ -46,7 +46,7 @@ Say which source wins. This kit's order, highest first: the user's live request;
 
 ## Writing
 
-Plain language, active voice, and the action connected to its purpose. Prefer a concrete example to an abstraction. The post ships a blocklist of filler; the ones this kit already bans or should: "delve", "foster", "leverage", "genuinely", "importantly", "it's worth noting", "Bottom line:", rhetorical question-then-answer, "this isn't about X, it's about Y", and stacked hyphenated compound adjectives. The vault's `05-Profile/Owen-Voice.md` governs anything drafted in Owen's voice and already excludes em dashes.
+Plain language, active voice, and the action connected to its purpose. Prefer a concrete example to an abstraction. This kit bans filler such as "delve", "foster", "leverage", "genuinely", "importantly", "it's worth noting", "Bottom line:", rhetorical question-then-answer, "this isn't about X, it's about Y", and stacked hyphenated compound adjectives. The vault's `05-Profile/Owen-Voice.md` governs anything drafted in Owen's voice and already excludes em dashes.
 
 ## Delegation
 

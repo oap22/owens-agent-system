@@ -109,9 +109,26 @@ class OASTest(unittest.TestCase):
         for agent in oas.AGENTS[:-1]:
             cmd = oas.command(agent, 'research', self.root, 'Question')
             self.assertIn('Frame → Work → Prove → Hand off', ' '.join(cmd))
+            self.assertIn('automatic context compaction as lossy working-memory compression', ' '.join(cmd))
             self.assertTrue(cmd[-1].endswith('Question'))
             self.assertNotIn('--yolo', cmd)
             self.assertNotIn('--allow-all', cmd)
+
+    def test_claude_native_autocompact_is_explicit(self):
+        for mode in ('development', 'research', 'ops', 'tutor'):
+            cmd = oas.command('claude', mode, self.root, 'Task')
+            self.assertEqual(cmd.count('--autocompact'), 1, mode)
+            self.assertEqual(cmd[cmd.index('--autocompact') + 1], 'auto', mode)
+
+    def test_every_workflow_defines_compaction_continuity(self):
+        for mode in oas.MODES:
+            workflow = (oas.ROOT / f'workflows/{mode}.md').read_text(encoding='utf-8').lower()
+            self.assertIn('compact', workflow, mode)
+            self.assertTrue('checkpoint' in workflow or 'retrieval' in workflow, mode)
+
+    def test_compaction_scenarios_cover_every_mode(self):
+        covered = {item['mode'] for item in oas.scenarios() if item['id'].startswith('compact-')}
+        self.assertEqual(covered, set(oas.MODES))
 
     def test_native_tutor_controls(self):
         self.assertIn('plan', oas.command('claude', 'tutor', self.root, 'Teach me'))
@@ -178,7 +195,28 @@ class OASTest(unittest.TestCase):
     def test_initial_task_valid_not_complete(self):
         p = self.task()
         self.assertEqual(oas.validate_task(p), [])
-        self.assertEqual(json.loads(p.read_text())['status'], 'planned')
+        data = json.loads(p.read_text())
+        self.assertEqual((data['schema_version'], data['status']), (2, 'planned'))
+        self.assertEqual(data['checkpoint'], {
+            'phase': 'frame', 'completed': [], 'blockers': [], 'next_action': 'Confirm scope and begin',
+            'commit': None, 'worktree': None, 'owned_files': [], 'changed_files': [], 'evidence_paths': [],
+            'reverify': [], 'cursor': None, 'iteration': 0, 'retries_used': 0,
+        })
+
+    def test_version_two_checkpoint_fields_are_required_and_version_one_stays_readable(self):
+        p = self.task()
+        original = json.loads(p.read_text())
+        for field in ('phase', 'next_action', 'completed', 'owned_files', 'changed_files', 'evidence_paths',
+                      'reverify', 'commit', 'worktree', 'cursor', 'iteration', 'retries_used'):
+            data = json.loads(json.dumps(original))
+            del data['checkpoint'][field]
+            p.write_text(json.dumps(data))
+            self.assertTrue(oas.validate_task(p), field)
+        legacy = json.loads(json.dumps(original))
+        legacy['schema_version'] = 1
+        legacy['checkpoint'] = {k: legacy['checkpoint'][k] for k in ('completed', 'blockers', 'next_action', 'commit')}
+        p.write_text(json.dumps(legacy))
+        self.assertEqual(oas.validate_task(p), [])
 
     def test_complete_requires_all_evidence(self):
         p = self.task()
@@ -210,6 +248,31 @@ class OASTest(unittest.TestCase):
         p.write_text(json.dumps(data))
         self.assertTrue(oas.validate_task(p))
         data.update(authorized_actions=['Write local report'], writable_scope=['reports/'], budget={'max_minutes':10,'max_iterations':2})
+        p.write_text(json.dumps(data))
+        self.assertEqual(oas.validate_task(p), [])
+
+    def test_unattended_continuity_cannot_exceed_contract(self):
+        p = self.task(); data = json.loads(p.read_text())
+        data.update(mode='unattended', status='active', authorized_actions=['Write local report'],
+                    writable_scope=['reports/'], budget={'max_minutes': 10, 'max_iterations': 2}, retry_limit=1)
+        data['checkpoint'].update(iteration=3, retries_used=2)
+        p.write_text(json.dumps(data))
+        errors = oas.validate_task(p)
+        self.assertIn('Checkpoint retries exceed retry limit', errors)
+        self.assertIn('Checkpoint iteration exceeds task budget', errors)
+        data['schema_version'] = 1
+        data['checkpoint'] = {k: data['checkpoint'][k] for k in ('completed', 'blockers', 'next_action', 'commit')}
+        p.write_text(json.dumps(data))
+        self.assertIn('Active unattended task requires schema version 2 continuity state', oas.validate_task(p))
+
+    def test_checkpoint_evidence_must_be_local_and_present(self):
+        p = self.task(); data = json.loads(p.read_text())
+        for evidence in ('../outside.txt', '/absolute.txt', 'missing.txt'):
+            data['checkpoint']['evidence_paths'] = [evidence]
+            p.write_text(json.dumps(data))
+            self.assertTrue(oas.validate_task(p), evidence)
+        (p.parent / 'result.txt').write_text('current evidence')
+        data['checkpoint']['evidence_paths'] = ['result.txt']
         p.write_text(json.dumps(data))
         self.assertEqual(oas.validate_task(p), [])
 
@@ -438,18 +501,22 @@ class OASTest(unittest.TestCase):
         self.assertEqual(len(keys), 1)
         self.assertEqual(sum(a.startswith('model_reasoning_effort=') for a in oas.command('codex', 'development', self.root, 'T', lead_effort='low')), 1)
         path = Path(json.loads(keys[0].split('=', 1)[1]))
-        self.assertEqual(path, self.root / '.oas/roles/implementor.toml')
+        self.assertEqual(path.parent, self.root / '.oas/roles')
+        original = path.read_bytes()
         layer = tomllib.loads(path.read_text(encoding='utf-8'))
         self.assertEqual((layer['model'], layer['model_reasoning_effort'], layer['sandbox_mode']), ('gpt-mini', 'low', 'workspace-write'))
         self.assertEqual(layer['developer_instructions'], oas.role('implementor')['developer_instructions'])
         oas.command('codex', 'development', self.root, 'Task', worker_effort='medium')
-        layer = tomllib.loads(path.read_text(encoding='utf-8'))
+        other = oas.implementor_overlay(self.root, {'effort': 'medium'})
+        self.assertNotEqual(path, other)
+        self.assertEqual(path.read_bytes(), original)
+        layer = tomllib.loads(other.read_text(encoding='utf-8'))
         self.assertNotIn('model', layer); self.assertEqual(layer['model_reasoning_effort'], 'medium')
         plain = [a for a in oas.command('codex', 'development', self.root, 'Task') if a.startswith('agents.implementor.config_file=')]
         self.assertEqual(plain, [f'agents.implementor.config_file={oas.toml_value(str(oas.ROOT / "config/agents/implementor.toml"))}'])
         path.unlink(); path.symlink_to(self.root / 'elsewhere')
         with self.assertRaises(ValueError):
-            oas.command('codex', 'development', self.root, 'Task', worker_effort='low')
+            oas.command('codex', 'development', self.root, 'Task', worker_model='gpt-mini', worker_effort='low')
 
     def test_delegation_refused_where_unsupported(self):
         for agent in ('cursor', 'copilot', 'opencode'):
@@ -513,6 +580,80 @@ class ModelFlagTest(unittest.TestCase):
 
 
 class TokenEconomyTest(unittest.TestCase):
+    def test_preview_does_not_write_and_doctor_uses_launch_options(self):
+        args = ['development', '--workspace', str(self.root), '--model', 'gpt-6-astra',
+                '--lead-effort', 'high', '--worker-model', 'gpt-5.6-luna',
+                '--worker-effort', 'low', '--worker-retry-effort', 'medium']
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(oas.main(['preview', *args, '--task', 'Fix it']), 0)
+        self.assertFalse((self.root / '.oas').exists())
+        with patch.object(oas.shutil, 'which', return_value='/bin/codex'), patch.object(oas.subprocess, 'call', return_value=0) as call:
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(oas.main(['doctor', *args]), 0)
+        cmd = call.call_args.args[0]
+        self.assertEqual(cmd[-2:], ['doctor', '--summary'])
+        self.assertEqual(cmd[cmd.index('--model') + 1], 'gpt-6-astra')
+        self.assertIn('model_reasoning_effort="high"', cmd)
+        self.assertEqual(call.call_args.kwargs['cwd'], self.root)
+        self.assertEqual(len(list((self.root / '.oas/roles').glob('*.toml'))), 2)
+
+    def test_role_snapshots_parallel_and_parent_symlinks(self):
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            paths = list(pool.map(lambda effort: oas.implementor_overlay(self.root, {'effort': effort}),
+                                  ['low', 'medium', 'low', 'high']))
+        self.assertEqual(paths[0], paths[2])
+        self.assertEqual(len(set(paths)), 3)
+        for path, effort in zip(paths, ['low', 'medium', 'low', 'high']):
+            self.assertEqual(tomllib.loads(path.read_text(encoding='utf-8'))['model_reasoning_effort'], effort)
+        workspace = self.root / 'other'; workspace.mkdir()
+        (workspace / '.oas').symlink_to(self.root / '.oas')
+        with self.assertRaisesRegex(ValueError, 'symlink'):
+            oas.implementor_overlay(workspace, {'effort': 'low'})
+
+    def test_runtime_selection_is_explicit_and_invalid_choice_fails(self):
+        binary = self.root / 'custom codex'
+        binary.write_text('#!/bin/sh\nexit 0\n', encoding='utf-8'); binary.chmod(0o700)
+        with patch.dict(oas.os.environ, {'OAS_CODEX_BIN': str(binary)}):
+            self.assertEqual(oas.launch_command('codex', 'development', self.root, 'Task')[0], str(binary))
+        with patch.dict(oas.os.environ, {'OAS_CODEX_BIN': '/missing/oas-codex'}):
+            with self.assertRaisesRegex(ValueError, 'OAS_CODEX_BIN'):
+                oas.launch_command('codex', 'development', self.root, 'Task')
+
+    def test_cost_groups_modes_cohorts_and_unique_completed_tasks(self):
+        base = dict(task='same', harness='claude', mode='development', result='pass', cost_usd=2)
+        for _ in range(2):
+            oas.log_run(self.root, **base)
+        oas.log_run(self.root, **dict(base, mode='research'))
+        oas.log_run(self.root, **dict(base, cohort='new-suite', runtime_version='2.1.266'))
+        report = oas.report_runs(self.root)
+        self.assertIn('development / unspecified / claude lead inherit@default alone | 2 | 1 | 4.00', report)
+        self.assertIn('research / unspecified / claude', report)
+        self.assertIn('development / new-suite / claude [runtime 2.1.266]', report)
+        for value in (float('nan'), float('inf'), -float('inf')):
+            for key in ('cost_usd', 'minutes'):
+                with self.assertRaises(ValueError):
+                    oas.log_run(self.root, **dict(base, **{key: value}))
+
+    def test_cli_cost_report_keeps_distinct_configuration_fields_separate(self):
+        common = [sys.executable, str(SOURCE), 'log-run', '--output', str(self.root), '--task', 'same',
+                  '--mode', 'development', '--result', 'pass', '--cohort', 'coding-v1', '--cost-usd', '2']
+        subprocess.run([*common, '--harness', 'codex 0.154'], check=True, capture_output=True)
+        subprocess.run([*common, '--harness', 'codex', '--runtime-version', '0.154'], check=True, capture_output=True)
+        report = subprocess.run([sys.executable, str(SOURCE), 'report-runs', '--output', str(self.root)],
+                                check=True, capture_output=True, text=True).stdout.splitlines()
+        self.assertEqual(len(report), 3, report)
+        self.assertNotEqual(report[1].split(' | ')[0], report[2].split(' | ')[0])
+        for row in report[1:]:
+            self.assertIn(' | 1 | 1 | 2.00 | 0 | ', row)
+
+    def test_malformed_checkpoint_returns_errors_instead_of_crashing(self):
+        path = oas.new_task('development', self.root, 'Fix it', ['Regression passes']) / 'task.json'
+        record = json.loads(path.read_text(encoding='utf-8'))
+        for value in (None, 5, False, 'evidence.txt'):
+            record['checkpoint']['evidence_paths'] = value
+            path.write_text(json.dumps(record), encoding='utf-8')
+            self.assertIn('Checkpoint evidence_paths must be a string list', oas.validate_task(path))
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
@@ -536,11 +677,11 @@ class TokenEconomyTest(unittest.TestCase):
     def test_retry_rung_writes_second_codex_layer_and_registers_it(self):
         cmd = oas.command('codex', 'development', self.root, 'Task', worker_model='gpt-mini', worker_effort='low', retry_effort='high')
         keys = {a.split('=', 1)[0]: json.loads(a.split('=', 1)[1]) for a in cmd if a.startswith('agents.implementor')}
-        self.assertEqual(Path(keys['agents.implementor-retry.config_file']), self.root / '.oas/roles/implementor-retry.toml')
+        self.assertEqual(Path(keys['agents.implementor-retry.config_file']).parent, self.root / '.oas/roles')
         self.assertTrue(keys['agents.implementor-retry.description'])
         self.assertEqual(keys['agents.implementor.description'], oas.config('development')['agents']['implementor']['description'])
-        first = tomllib.loads((self.root / '.oas/roles/implementor.toml').read_text(encoding='utf-8'))
-        retry = tomllib.loads((self.root / '.oas/roles/implementor-retry.toml').read_text(encoding='utf-8'))
+        first = tomllib.loads(Path(keys['agents.implementor.config_file']).read_text(encoding='utf-8'))
+        retry = tomllib.loads(Path(keys['agents.implementor-retry.config_file']).read_text(encoding='utf-8'))
         self.assertEqual((first['model'], first['model_reasoning_effort']), ('gpt-mini', 'low'))
         self.assertEqual((retry['model'], retry['model_reasoning_effort']), ('gpt-mini', 'high'))
         self.assertEqual(retry['developer_instructions'], first['developer_instructions'])
@@ -635,3 +776,196 @@ class TokenEconomyTest(unittest.TestCase):
         self.assertIn('codex lead inherit@default worker inherit@low | 1 | 1 | 0.80', out.getvalue())
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(oas.main(['report-runs', '--output', str(self.root / 'nowhere')]), 2)
+
+
+class RetrospectiveTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+
+    def scaffold(self, **options):
+        return oas.new_retro(self.root, 'Fix the CSV import', 'development', 'claude', **options)
+
+    def filled(self, summary='Add a CSV fixture to the development scenario bank', **header):
+        facts = dict(task='csv-1', model='claude-fable-5-1@high', workspace='/work/project', outcome='partial', corrections=2, cost_usd=1.25, minutes=40)
+        facts.update(header)
+        path = self.scaffold(**facts)
+        text = path.read_text(encoding='utf-8')
+        body = text[text.index('## What went well'):]
+        report = text[:text.index('## What went well')] + '\n'.join([
+            '## What went well', '', '- The worktree was inspected first; `workflows/development.md` step 1 produced it.', '',
+            '## What went wrong', '', '- The import test was rerun three times | Expected: one run after the fix | Evidence: `.oas/csv-1/check.log` | Cost: 12 minutes', '',
+            '## Root causes', '', '- Repeated reruns <- policy guidance: step 5 does not say what "unresolved concern" means.', '',
+            '## Proposed change', '', f'Summary: {summary}', '',
+            'Why: The rerun loop above would have stopped at the first passing run with a fixture to compare against.', '',
+            'Files to change:', '- `evals/scenarios.json`: add a scenario for the CSV import', '- `workflows/development.md`: define the stop rule in step 5', '',
+            'Implementation steps:', '1. Add the scenario with a check that names the fixture file.', '2. Edit step 5 to stop after one passing run of the required checks.', '',
+            'Acceptance criteria:', '- `check` reports one more scenario', '- The workflow names the stop rule in one sentence', '',
+            'Validation:', '```sh', 'python3 scripts/oas.py check', 'python3 -m unittest discover -s tests -v', '```', '',
+            'Out of scope:', '- Changing the research workflow', ''])
+        del body
+        path.write_text(report, encoding='utf-8')
+        return path
+
+    def test_scaffold_fills_known_facts_and_verification_demands_the_rest(self):
+        path = self.scaffold(model='inherit', outcome='pass', corrections=0)
+        self.assertEqual(path.parent.parent, self.root / oas.RETRO_DIR)
+        text = path.read_text(encoding='utf-8')
+        self.assertTrue(text.startswith('# Retrospective: Fix the CSV import\n'))
+        self.assertIn('- Mode: development\n', text)
+        self.assertIn('- Harness: claude\n', text)
+        self.assertIn('- Outcome: pass\n', text)
+        self.assertIn('- Corrections by Owen: 0\n', text)
+        self.assertIn('- Workspace: <absolute path>\n', text, 'unknown facts stay as placeholders')
+        errors = oas.validate_retro(path)
+        self.assertTrue(any(e.startswith('Unfilled placeholder: <absolute path>') for e in errors), errors)
+        self.assertTrue(any(e.startswith('Unfilled placeholder: <one sentence naming the change') for e in errors), 'the template summary is a placeholder, not a proposal')
+        self.assertTrue(all(e.startswith('Unfilled placeholder: ') for e in errors), 'the template is structurally complete; only its placeholders block filing')
+        for bad in (dict(mode='nope'), dict(harness=' '), dict(outcome='done'), dict(corrections=-1), dict(cost_usd=float('nan'))):
+            options = dict(mode='development', harness='claude'); options.update(bad)
+            with self.assertRaises(ValueError, msg=bad):
+                oas.new_retro(self.root, 'Fix it', options.pop('mode'), options.pop('harness'), **options)
+
+    def test_filled_report_verifies_and_renders_an_implementation_ready_issue(self):
+        path = self.filled()
+        self.assertEqual(oas.validate_retro(path), [])
+        title, body = oas.retro_issue(path)
+        self.assertEqual(title, 'Retrospective: Add a CSV fixture to the development scenario bank')
+        self.assertTrue(body.startswith('The rerun loop above'), 'the issue opens with the reason')
+        summary = body[:body.index('<details>')]
+        for heading in ('## Problem observed', '## Root causes', '## Files to change', '## Implementation steps', '## Acceptance criteria', '## Validation', '## Out of scope', '## Session'):
+            self.assertEqual(summary.count(heading + '\n'), 1, heading)
+        self.assertLess(body.index('## Problem observed'), body.index('## Files to change'))
+        self.assertIn('- `evals/scenarios.json`: add a scenario for the CSV import', body)
+        self.assertIn('- Cost and time: 1.25, 40\n', body)
+        self.assertIn('<details><summary>Full retrospective</summary>', body)
+        self.assertIn('it grants no authorization', body)
+
+    def test_verification_rejects_structure_gaps_placeholders_and_credentials(self):
+        path = self.filled()
+        good = path.read_text(encoding='utf-8')
+        cases = {
+            'no title': ('# Retrospective: Fix the CSV import', '# Retro'),
+            'missing header fact': ('- Harness: claude\n', ''),
+            'bad outcome': ('- Outcome: partial', '- Outcome: done'),
+            'section out of order': ('## Root causes', '## Causes'),
+            'empty went wrong': ('- The import test was rerun three times', 'The import test was rerun'),
+            'no files': ('- `evals/scenarios.json`: add a scenario for the CSV import\n- `workflows/development.md`: define the stop rule in step 5\n', '- scenarios: add one\n'),
+            'no steps': ('1. Add the scenario with a check that names the fixture file.\n2. Edit step 5 to stop after one passing run of the required checks.\n', '- add it\n'),
+            'no criteria': ('- `check` reports one more scenario\n- The workflow names the stop rule in one sentence\n', '\n'),
+            'no validation': ('python3 scripts/oas.py check\npython3 -m unittest discover -s tests -v\n', ''),
+            'no out of scope': ('- Changing the research workflow\n', '\n'),
+            'placeholder left': ('- Changing the research workflow', '- <what this issue deliberately leaves alone>'),
+            'credential': ('- Changing the research workflow', '- token ghp_' + 'a1B2' * 6),
+            'multi-line summary': ('Summary: Add a CSV fixture to the development scenario bank\n', 'Summary: Add a CSV fixture\nto the bank\n'),
+            'title too long': ('Summary: Add a CSV fixture to the development scenario bank\n', 'Summary: ' + 'x' * 260 + '\n'),
+        }
+        for name, (old, new) in cases.items():
+            self.assertEqual(good.count(old), 1, name)
+            path.write_text(good.replace(old, new), encoding='utf-8')
+            self.assertNotEqual(oas.validate_retro(path), [], name)
+            with self.assertRaises(ValueError, msg=name):
+                oas.retro_issue(path)
+        path.write_text(good.replace('- The import test was rerun three times | Expected: one run after the fix | Evidence: `.oas/csv-1/check.log` | Cost: 12 minutes', '- None observed.'), encoding='utf-8')
+        self.assertEqual(oas.validate_retro(path), [], 'an explicit "None observed." satisfies a section')
+
+    def test_no_change_proposed_skips_the_issue_without_calling_gh(self):
+        path = self.filled(summary=oas.NO_CHANGE)
+        self.assertEqual(oas.validate_retro(path), [])
+        self.assertIsNone(oas.retro_issue(path))
+        with patch.object(oas.subprocess, 'run', side_effect=AssertionError('gh must not run')):
+            self.assertIsNone(oas.file_retro_issue(path, repo='oap22/owens-agent-system'))
+        self.assertFalse((path.parent / 'issue.json').exists())
+        self.assertFalse((path.parent / 'issue-body.md').exists())
+
+    def test_issue_is_filed_once_through_gh_and_recorded(self):
+        path = self.filled()
+        url = 'https://github.com/oap22/owens-agent-system/issues/42'
+        calls = []
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return subprocess.CompletedProcess(cmd, 0, stdout=f'\nCreating issue in oap22/owens-agent-system\n\n{url}\n', stderr='')
+        with patch.object(oas.subprocess, 'run', side_effect=fake_run), patch.object(oas.shutil, 'which', return_value='/usr/bin/gh'):
+            record = oas.file_retro_issue(path, repo='oap22/owens-agent-system', labels=('retrospective', 'enhancement'))
+        self.assertEqual(record['url'], url)
+        cmd, kwargs = calls[0]
+        self.assertEqual(cmd[:3], ['gh', 'issue', 'create'])
+        self.assertEqual(cmd[cmd.index('--repo') + 1], 'oap22/owens-agent-system')
+        self.assertEqual(cmd[cmd.index('--title') + 1], 'Retrospective: Add a CSV fixture to the development scenario bank')
+        self.assertEqual(cmd.count('--label'), 2)
+        self.assertEqual(Path(cmd[cmd.index('--body-file') + 1]), path.parent / 'issue-body.md')
+        self.assertFalse(kwargs.get('shell'), 'never through a shell')
+        self.assertEqual(kwargs['cwd'], oas.ROOT)
+        self.assertEqual(json.loads((path.parent / 'issue.json').read_text(encoding='utf-8'))['url'], url)
+        self.assertEqual((path.parent / 'issue-body.md').read_text(encoding='utf-8'), oas.retro_issue(path)[1])
+        with self.assertRaises(ValueError) as caught, patch.object(oas.subprocess, 'run', side_effect=AssertionError('gh must not run again')):
+            oas.file_retro_issue(path, repo='oap22/owens-agent-system')
+        self.assertIn(url, str(caught.exception))
+
+    def test_gh_failure_and_bad_output_leave_no_record(self):
+        path = self.filled()
+        failures = [subprocess.CompletedProcess([], 1, stdout='', stderr='could not add label: retrospective not found'),
+                    subprocess.CompletedProcess([], 0, stdout='not a url\n', stderr='')]
+        for completed in failures:
+            with patch.object(oas.subprocess, 'run', return_value=completed), patch.object(oas.shutil, 'which', return_value='/usr/bin/gh'):
+                with self.assertRaises(ValueError):
+                    oas.file_retro_issue(path, repo='oap22/owens-agent-system')
+            self.assertFalse((path.parent / 'issue.json').exists())
+        with patch.object(oas.shutil, 'which', return_value=None):
+            with self.assertRaises(ValueError):
+                oas.file_retro_issue(path, repo='oap22/owens-agent-system')
+        for repo in ('owens-agent-system', 'a/b/c', 'a b/c'):
+            with self.assertRaises(ValueError, msg=repo):
+                oas.file_retro_issue(path, repo=repo, dry_run=True)
+        with self.assertRaises(ValueError):
+            oas.file_retro_issue(path, repo='oap22/owens-agent-system', labels=('',), dry_run=True)
+
+    def test_default_repo_is_this_kit_and_parses_both_remote_forms(self):
+        self.assertEqual(oas.repo_slug('git@github.com:oap22/owens-agent-system.git\n'), 'oap22/owens-agent-system')
+        self.assertEqual(oas.repo_slug('https://github.com/oap22/owens-agent-system'), 'oap22/owens-agent-system')
+        self.assertEqual(oas.repo_slug('https://github.com/oap22/owens-agent-system.git/'), 'oap22/owens-agent-system')
+        with self.assertRaises(ValueError):
+            oas.repo_slug('https://gitlab.com/oap22/owens-agent-system.git')
+        with patch.object(oas.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, stdout='git@github.com:oap22/owens-agent-system.git\n', stderr='')) as run:
+            self.assertEqual(oas.default_repo(), 'oap22/owens-agent-system')
+        self.assertEqual(run.call_args.args[0][:4], ['git', '-C', str(oas.ROOT), 'remote'])
+        with patch.object(oas.subprocess, 'run', side_effect=subprocess.CalledProcessError(128, 'git')):
+            with self.assertRaises(ValueError):
+                oas.default_repo()
+
+    def test_cli_scaffold_verify_and_dry_run(self):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            self.assertEqual(oas.main(['retro', '--output', str(self.root), '--title', 'Fix it', '--mode', 'development', '--harness', 'codex', '--outcome', 'pass']), 0)
+            scaffold = Path(out.getvalue().strip())
+            self.assertEqual(oas.main(['verify-retro', str(scaffold)]), 1)
+            self.assertEqual(oas.main(['retro-issue', str(scaffold), '--dry-run', '--repo', 'oap22/owens-agent-system']), 2)
+        self.assertIn('Unfilled placeholder', err.getvalue())
+        path = self.filled()
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), patch.object(oas.subprocess, 'run', side_effect=AssertionError('dry run must not call gh')):
+            self.assertEqual(oas.main(['verify-retro', str(path)]), 0)
+            self.assertEqual(oas.main(['retro-issue', str(path), '--dry-run', '--repo', 'oap22/owens-agent-system', '--label', 'enhancement']), 0)
+        self.assertIn('PASS: retrospective structure', out.getvalue())
+        self.assertIn('Retrospective: Add a CSV fixture to the development scenario bank\n\nThe rerun loop', out.getvalue())
+        self.assertIn('--label enhancement', err.getvalue())
+        self.assertFalse((path.parent / 'issue.json').exists())
+        with patch.object(oas.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, stdout='https://github.com/oap22/owens-agent-system/issues/7\n', stderr='')), \
+                patch.object(oas.shutil, 'which', return_value='/usr/bin/gh'), contextlib.redirect_stdout(out):
+            self.assertEqual(oas.main(['retro-issue', str(path), '--repo', 'oap22/owens-agent-system']), 0)
+        self.assertTrue(out.getvalue().endswith('https://github.com/oap22/owens-agent-system/issues/7\n'))
+
+    def test_contract_and_template_agree_on_the_reflect_step(self):
+        contract = (oas.ROOT / 'prompts/core.md').read_text(encoding='utf-8')
+        self.assertIn('Frame → Work → Prove → Hand off → Reflect', contract)
+        for command in ('oas.py retro', 'verify-retro', 'retro-issue', 'templates/retrospective.md'):
+            self.assertIn(command, contract)
+        self.assertIn('authorizes nothing', contract)
+        template = (oas.ROOT / oas.RETRO_TEMPLATE).read_text(encoding='utf-8')
+        _, header, sections = oas.parse_retro(template)
+        self.assertEqual(tuple(header), oas.RETRO_HEADER)
+        self.assertEqual(tuple(sections), oas.RETRO_SECTIONS)
+        self.assertEqual(tuple(label for label in oas.proposal_fields(sections['Proposed change']) if label not in ('Summary', 'Why')), oas.RETRO_FIELDS)
+        self.assertIn('retrospective', {item['id'] for item in oas.scenarios()})
+        self.assertIn('Retrospective path and issue URL:', (oas.ROOT / 'templates/handoff.md').read_text(encoding='utf-8'))

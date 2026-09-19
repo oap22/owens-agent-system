@@ -422,7 +422,7 @@ def run_ui(plain=False, launcher=None, call=None):
                 return 0
             cmd, workspace = launcher.launch_request
             # The banner stays in scrollback as a record of what the agent was given.
-            banner = f'oas: {launcher.agent} in {workspace} with the {launcher.mode} workflow ({len(cmd)} args)'
+            banner = f'oas: {launcher.agent} ({cmd[0]}) in {workspace} with the {launcher.mode} workflow ({len(cmd)} args)'
             sys.stdout.write('\033[2J\033[H' + (banner if no_rain else f'\033[1;32m{banner}\033[0m') + '\n')
             sys.stdout.flush()
             code = call(cmd, cwd=workspace)

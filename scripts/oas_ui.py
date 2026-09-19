@@ -28,7 +28,8 @@ SCREENS = ('mode', 'agent', 'model', 'workspace', 'browser')
 INHERIT = 'inherit'
 TYPE_MODEL = 'type a model id…'
 ENTRY_FOOTER = '⏎ use  esc cancel'
-STATIC_MODELS = {'claude': ['fable', 'opus', 'sonnet', 'haiku'], 'copilot': ['auto']}
+# Documented identifiers are choices, not a claim about account access. Aliases remain available.
+STATIC_MODELS = {'claude': ['claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5', 'fable', 'opus', 'sonnet', 'haiku'], 'copilot': ['auto']}
 LIST_COMMANDS = {'codex': ['codex', 'debug', 'models'], 'cursor': ['cursor-agent', '--list-models'], 'opencode': ['opencode', 'models']}
 LIST_FOOTER = '↑↓ move  ⏎ select  ⌫ back  q quit'
 WORKSPACE_FOOTER = '↑↓ move  ⏎ launch  ⌫ back  q quit'
@@ -90,7 +91,7 @@ def parse_models(agent, text):
         return []
 
 
-def model_choices(agent, run=None):
+def model_choices(agent, run=None, environ=None):
     """Model ids the launcher offers for agent: live from the CLI where it can list them, static otherwise."""
     if agent in STATIC_MODELS:
         return list(STATIC_MODELS[agent])
@@ -99,8 +100,8 @@ def model_choices(agent, run=None):
         return []
     run = run or subprocess.run
     try:
-        result = run(cmd, capture_output=True, text=True, timeout=8)
-    except (OSError, subprocess.SubprocessError):
+        result = run([oas.executable(agent, environ), *cmd[1:]], capture_output=True, text=True, timeout=8)
+    except (ValueError, OSError, subprocess.SubprocessError):
         return []
     return parse_models(agent, result.stdout) if result.returncode == 0 else []
 
@@ -129,8 +130,8 @@ class Launcher:
         self.scan_root = (self.home / 'Developer/active') if scan_root is None else Path(scan_root)
         self.cwd = Path(os.getcwd()) if cwd is None else Path(cwd)
         self.which = which
-        self.list_models = list_models or model_choices   # injectable: tests must never run a CLI
         self.environ = os.environ if environ is None else environ
+        self.list_models = list_models or (lambda agent: model_choices(agent, environ=self.environ))
         self.screen = 'mode'
         self.cursor = {'mode': 0, 'agent': 0, 'model': 0, 'workspace': 0, 'browser': 0}
         self.mode = None
@@ -166,7 +167,12 @@ class Launcher:
                 rows.append(Row(agent, '', 'codex only', agent))
                 continue
             cmd = oas.command(agent, self.mode, self.cwd, 'placeholder', shared='never')
-            if not self._which(cmd[0]):
+            try:
+                selected = oas.executable(agent, self.environ)
+            except ValueError:
+                rows.append(Row(agent, '', 'invalid runtime path', agent))
+                continue
+            if not self._which(selected):
                 rows.append(Row(agent, '', 'not installed', agent))
             else:
                 rows.append(Row(agent, permission_label(cmd, agent, self.mode), None, agent))
@@ -382,7 +388,8 @@ class Launcher:
     def _launch(self):
         """Choosing a workspace launches an open session; refusals stay on screen as error."""
         try:
-            cmd = oas.launch_command(self.agent, self.mode, self.workspace, '', 'auto', self.home, model=self.model)
+            cmd = oas.launch_command(self.agent, self.mode, self.workspace, '', 'auto', self.home,
+                                     model=self.model, environ=self.environ)
             self.launch_request = (cmd, oas.workspace_path(self.workspace))
         except ValueError as exc:
             self.error = str(exc)

@@ -868,6 +868,28 @@ class ModelScreenTest(OASUITestBase):
 
 
 class ModelChoicesTest(unittest.TestCase):
+    def test_launcher_uses_one_runtime_for_availability_models_and_launch(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            binaries = []
+            for label in ('process', 'selected'):
+                binary = root / label
+                binary.write_text('#!/bin/sh\nprintf \'%s\\n\' \'{"models":[{"slug":"' + label + '-model"}]}\'\n')
+                binary.chmod(0o700)
+                binaries.append(binary)
+            with patch.dict(os.environ, {'OAS_CODEX_BIN': str(binaries[0])}):
+                launcher = oas_ui.Launcher(home=root, cwd=root, scan_root=root,
+                                          environ={**os.environ, 'OAS_CODEX_BIN': str(binaries[1])})
+                launcher.key('enter')
+                self.assertIsNone(launcher.rows()[0].disabled)
+                launcher.key('enter')
+                self.assertEqual([row.value for row in launcher.rows()][1:-1], ['selected-model'])
+                launcher.key('down'); launcher.key('enter'); launcher.key('enter')
+                cmd, workspace = launcher.launch_request
+                self.assertEqual(cmd[0], str(binaries[1]))
+                self.assertEqual(cmd[cmd.index('--model') + 1], 'selected-model')
+                self.assertEqual(workspace, root)
+
     def test_parse_codex_json_cursor_text_opencode_text(self):
         codex = '{"models": [{"slug": "gpt-a"}, {"slug": "gpt-b", "x": 1}, {"nope": 1}]}'
         self.assertEqual(oas_ui.parse_models('codex', codex), ['gpt-a', 'gpt-b'])
@@ -877,7 +899,8 @@ class ModelChoicesTest(unittest.TestCase):
         self.assertEqual(oas_ui.parse_models('codex', 'not json'), [])
 
     def test_model_choices_static_and_failure_paths(self):
-        self.assertEqual(oas_ui.model_choices('claude'), ['fable', 'opus', 'sonnet', 'haiku'])
+        self.assertEqual(oas_ui.model_choices('claude')[:3], ['claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5'])
+        self.assertIn('fable', oas_ui.model_choices('claude'))
         self.assertEqual(oas_ui.model_choices('nonesuch'), [])
         ran = []
         class R:

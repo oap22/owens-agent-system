@@ -14,4 +14,6 @@ Next concrete action:
 
 Authorization boundaries still in effect:
 
+Retrospective path and issue URL:
+
 The next agent should verify the live artifact and current ownership before continuing.
