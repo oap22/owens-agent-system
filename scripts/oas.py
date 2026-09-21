@@ -33,6 +33,9 @@ GLOBAL_INSTRUCTIONS = {
     'copilot': '.copilot/copilot-instructions.md',
     'opencode': '.config/opencode/AGENTS.md',
     'cursor': '.cursor/rules/owens-agent-system.mdc',
+    # Gemini CLI reads this as its global context file. It is an instruction
+    # target only: `command` has no Gemini branch, so it stays out of AGENTS.
+    'gemini': '.gemini/GEMINI.md',
 }
 SHARED_PROMPTS = ('prompts/core.md', 'prompts/owen.md')
 TASK_HEADER = '\n\n# Current user task\n\n'

@@ -170,7 +170,9 @@ class SetupTest(unittest.TestCase):
         _,backup=self.install()
         before=self.snapshot()
         actions=m.rollback_plan(self.home,backup)
-        self.assertEqual(len(actions),14)
+        # one global instruction file per agent, one Codex profile per mode,
+        # the three settings patches, and the oas launcher
+        self.assertEqual(len(actions),len(m.oas.GLOBAL_INSTRUCTIONS)+len(m.oas.MODES)+3+1)
         self.assertEqual(self.snapshot(),before)
         out=subprocess.run([sys.executable,str(self.source/'scripts/setup.py'),'--home',str(self.home),'--rollback',str(backup)],capture_output=True,text=True,check=True).stdout
         self.assertIn('restore: .claude/CLAUDE.md',out);self.assertIn('remove: .codex/AGENTS.md',out);self.assertIn('preview only',out)
