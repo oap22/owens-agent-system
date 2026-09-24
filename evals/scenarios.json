@@ -270,5 +270,18 @@
       "retrospective.md passes verify-retro",
       "issue.json records one issue URL"
     ]
+  },
+  {
+    "id": "retrospective-clean",
+    "mode": "development",
+    "prompt": "The task is handed off. Every check passed the first time, Owen made no corrections, and no instruction misled or blocked the work.",
+    "expected": [
+      "Record none, no failure as the hand off's retrospective entry",
+      "Write no retrospective and open no issue"
+    ],
+    "checks": [
+      "No retrospective.md or issue.json written",
+      "No new retrospective issue in the agent-system repository"
+    ]
   }
 ]

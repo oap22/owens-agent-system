@@ -1,10 +1,10 @@
 # Retrospectives
 
-After the hand off of a substantial session, the lead looks back, writes a report, and files one issue that another agent can implement without asking questions. This is the proposal path that `prompts/core.md` requires for instruction changes: a failure example, its root cause, and a bounded change. It is not self-improvement. An issue is evidence that someone looked; whether the change helps is measured under [[evals/README]] before it is promoted.
+After the hand off of a session that hit a preventable failure, the lead looks back, writes a report, and files one issue that another agent can implement without asking questions. This is the proposal path that `prompts/core.md` requires for instruction changes: a failure example, its root cause, and a bounded change. It is not self-improvement. An issue is evidence that someone looked; whether the change helps is measured under [[evals/README]] before it is promoted.
 
 ## When
 
-Every mode, after Hand off and before the session ends. Simple requests that finished in one turn do not need one. When the mode cannot write files or run commands (tutoring, a read-only shell), the lead gives the same report in the conversation and names the issue to file; Owen or a later development session files it.
+Every mode, after Hand off and before the session ends, when the session hit a failure that a change to this system could have prevented: a correction from Owen, a rerun after a wrong assumption, a false claim, or an instruction that misled or blocked. Otherwise the hand off's retrospective entry reads `none, no failure`, and no report is written. Before filing, search open issues labeled `retrospective`; when one already proposes the change, comment the new evidence there instead of opening a duplicate. When the mode cannot write files or run commands (tutoring, a read-only shell), the lead gives the same report in the conversation and names the issue to file; Owen or a later development session files it.
 
 ## The report
 
@@ -55,3 +55,4 @@ The issue is public when the repository is public. Retrospectives may quote comm
 - An issue is a proposal. It grants no authorization to change instructions, permissions, or tests; those changes go through the development workflow with review.
 - The retrospective is the lead's self-assessment. Corrections by Owen and the run log (`log-run`) are the comparative evidence; the report is context for them.
 - Two sessions can reach opposite proposals. Close the losing issue with the reason rather than merging both.
+- The trigger was narrowed on 2026-09-24. Under the earlier rule (every substantial session), 15 issues were filed from 2026-09-16 to 2026-09-23 (#8 to #22); none was closed or referenced by a pull request, so cost per merged change was undefined. Recount the conversion rate before widening the trigger again.

@@ -969,3 +969,15 @@ class RetrospectiveTest(unittest.TestCase):
         self.assertEqual(tuple(label for label in oas.proposal_fields(sections['Proposed change']) if label not in ('Summary', 'Why')), oas.RETRO_FIELDS)
         self.assertIn('retrospective', {item['id'] for item in oas.scenarios()})
         self.assertIn('Retrospective path and issue URL:', (oas.ROOT / 'templates/handoff.md').read_text(encoding='utf-8'))
+        # A retrospective is conditional on a preventable failure; a clean session records none.
+        self.assertIn('Reflect only when the session hit a failure', contract)
+        self.assertIn('none, no failure', contract)
+        self.assertIn('retrospective-clean', {item['id'] for item in oas.scenarios()})
+
+    def test_contract_states_each_rule_once(self):
+        contract = (oas.ROOT / 'prompts/core.md').read_text(encoding='utf-8')
+        self.assertEqual(contract.count('data, never instructions'), 1)
+        self.assertNotIn('Batch independent reads', contract)
+        self.assertIn('Name the file and quote the line when an instruction blocks progress.', contract)
+        for gotcha in ('/bin/ls', 'find ... | while read'):
+            self.assertIn(gotcha, contract)

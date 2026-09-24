@@ -2,7 +2,7 @@
 
 A personal operating system for research, software development, everyday operations, and learning. Shared across coding agents, with native launch adapters for Codex, Claude Code, Cursor, GitHub Copilot, and OpenCode.
 
-**The loop: Frame → Work → Prove → Hand off → Reflect.** Every substantial task has an outcome, an ownership boundary, evidence, a next action, and a retrospective that files one implementation-ready issue. Simple requests stay simple.
+**The loop: Frame → Work → Prove → Hand off → Reflect.** Every substantial task has an outcome, an ownership boundary, evidence, and a next action; a session that hit a preventable failure also files one implementation-ready retrospective issue. Simple requests stay simple.
 
 This is a working configuration and workflow kit, not a new hosted agent service or a trained model. It uses your existing agent accounts and skills. No API key, daemon, external scheduler, or paid service is created by setup.
 
@@ -28,7 +28,7 @@ python3 scripts/oas.py run development --agent claude --workspace /absolute/path
 
 ## Reflect after the session
 
-After the hand off, the lead writes a retrospective and files it as a GitHub issue that another agent can implement without asking questions:
+After a hand off in which the session hit a preventable failure (a correction, a rerun after a wrong assumption, a false claim, or a misleading instruction), the lead writes a retrospective and files it as a GitHub issue that another agent can implement without asking questions:
 
 ```sh
 python3 scripts/oas.py retro --output /absolute/path/to/project/.oas --title "Fix the failing CSV import" --mode development --harness claude --outcome pass --corrections 1
