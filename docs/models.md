@@ -20,7 +20,7 @@ API rates per million input/output tokens: Astra $10/$50, Sol $2/$10, Luna $0.10
 
 Codex subagents inherit the parent's model and effort unless configured. Set `[agents] default_subagent_model` and `default_subagent_reasoning_effort` in `~/.codex/config.toml` (present in CLI 0.156.1), or `model` in a `~/.codex/agents/*.toml` file for one role. After CLI 0.144, users reported subagents ignoring their configured model, so confirm the effective model in session logs. Luna cannot run Codex's `ultra` effort, the level that delegates to subagents without being asked.
 
-For independent workers, compare a cheaper model against lower effort on the lead model; neither wins by default. When a Luna packet fails its acceptance check, escalate it to Sol at `medium` rather than retrying on Luna. `claude-sonnet-5` is the Claude-side worker candidate. Record the effective model and effort.
+For independent workers, compare a cheaper model against lower effort on the lead model; neither wins by default. When a Luna packet fails its acceptance check, escalate it to Sol at `medium` rather than retrying on Luna; `--worker-retry-model gpt-6-sol --worker-retry-effort medium` configures that rung. `claude-sonnet-5` is the Claude-side worker candidate. Record the effective model and effort.
 
 ## Prompting implications
 
@@ -39,7 +39,8 @@ Use `OAS_CODEX_BIN` or `OAS_CLAUDE_BIN` for explicit executable paths. The UI ca
 ```sh
 python3 scripts/oas.py doctor development --workspace /path/to/worktree \
   --model gpt-6-sol --lead-effort medium \
-  --worker-model gpt-6-luna --worker-effort high --worker-retry-effort xhigh
+  --worker-model gpt-6-luna --worker-effort high \
+  --worker-retry-model gpt-6-sol --worker-retry-effort medium
 python3 scripts/oas.py preview development --agent claude --workspace /path/to/worktree \
   --model claude-fable-5-1 --lead-effort high --task 'Implement the criteria in .oas/task.json'
 ```

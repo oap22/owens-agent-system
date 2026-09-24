@@ -18,7 +18,7 @@ Delegation needs authorization. Use [[templates/task-packet]] for disjoint owned
 
 Specify worker model and effort in comparisons; inherited settings can make a supposedly cheap worker expensive. OAS preserves omission as inheritance and never silently selects a cheaper model.
 
-Diagnose failure before retrying. Missing access, wrong inputs, invalid checks, and unavailable models need correction rather than more effort. A configured `implementor-retry` role permits one higher-effort retry on the same model. It does not automatically dispatch work or enforce a total token budget. Count failed attempts and lead repair.
+Diagnose failure before retrying. Missing access, wrong inputs, invalid checks, and unavailable models need correction rather than more effort. A configured `implementor-retry` role permits one retry, at higher effort on the same model or on a stronger model set by `--worker-retry-model`. It does not automatically dispatch work or enforce a total token budget. Count failed attempts and lead repair.
 
 | Harness | Lead effort | Worker configuration |
 |---|---|---|

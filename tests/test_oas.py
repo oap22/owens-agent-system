@@ -700,6 +700,69 @@ class TokenEconomyTest(unittest.TestCase):
             oas.command('cursor', 'development', self.root, 'Task', worker_effort='low', retry_effort='high')
         self.assertFalse((self.root / '.oas').exists())
 
+    def test_retry_model_escalates_claude_and_codex_rung(self):
+        cmd = oas.command('claude', 'development', self.root, 'Task', shared='never', worker_model='gpt-6-luna', worker_effort='high',
+                          retry_model='gpt-6-sol', retry_effort='medium')
+        spec = json.loads(cmd[cmd.index('--agents') + 1])
+        first, retry = spec['implementor'], spec['implementor-retry']
+        self.assertEqual((first['model'], first['effort']), ('gpt-6-luna', 'high'))
+        self.assertEqual((retry['model'], retry['effort']), ('gpt-6-sol', 'medium'))
+        self.assertEqual(retry['prompt'], first['prompt'])
+        self.assertIn('gpt-6-sol', retry['description'])
+        self.assertNotIn('higher effort', retry['description'])
+        cmd = oas.command('codex', 'development', self.root, 'Task', worker_model='gpt-6-luna', worker_effort='high',
+                          retry_model='gpt-6-sol', retry_effort='medium')
+        keys = {a.split('=', 1)[0]: json.loads(a.split('=', 1)[1]) for a in cmd if a.startswith('agents.implementor')}
+        first = tomllib.loads(Path(keys['agents.implementor.config_file']).read_text(encoding='utf-8'))
+        retry = tomllib.loads(Path(keys['agents.implementor-retry.config_file']).read_text(encoding='utf-8'))
+        self.assertEqual((first['model'], first['model_reasoning_effort']), ('gpt-6-luna', 'high'))
+        self.assertEqual((retry['model'], retry['model_reasoning_effort']), ('gpt-6-sol', 'medium'))
+        self.assertIn('gpt-6-sol', keys['agents.implementor-retry.description'])
+
+    def test_retry_model_without_effort_keeps_worker_effort(self):
+        cmd = oas.command('claude', 'development', self.root, 'Task', shared='never', worker_model='gpt-6-luna', worker_effort='high',
+                          retry_model='gpt-6-sol')
+        retry = json.loads(cmd[cmd.index('--agents') + 1])['implementor-retry']
+        self.assertEqual((retry['model'], retry['effort']), ('gpt-6-sol', 'high'))
+        # An inherited worker model can still escalate to an explicit one.
+        cmd = oas.command('claude', 'development', self.root, 'Task', shared='never', worker_effort='low', retry_model='sonnet', retry_effort='low')
+        spec = json.loads(cmd[cmd.index('--agents') + 1])
+        self.assertNotIn('model', spec['implementor'])
+        self.assertEqual((spec['implementor-retry']['model'], spec['implementor-retry']['effort']), ('sonnet', 'low'))
+
+    def test_retry_model_validation(self):
+        base = dict(shared='never', worker_model='gpt-6-luna', worker_effort='high')
+        with self.assertRaisesRegex(ValueError, 'is the worker model'):
+            oas.command('claude', 'development', self.root, 'Task', retry_model='gpt-6-luna', **base)
+        with self.assertRaisesRegex(ValueError, 'Retry effort high must be higher than worker effort high'):
+            oas.command('claude', 'development', self.root, 'Task', retry_model='gpt-6-luna', retry_effort='high', **base)
+        same = oas.command('claude', 'development', self.root, 'Task', retry_model='gpt-6-luna', retry_effort='xhigh', **base)
+        self.assertIn('higher effort', json.loads(same[same.index('--agents') + 1])['implementor-retry']['description'])
+        for bad in ('', 'bad model', '-x', 'a;b', 'openai/gpt-6-sol'):
+            with self.assertRaisesRegex(ValueError, 'Worker retry model', msg=bad):
+                oas.command('claude', 'development', self.root, 'Task', retry_model=bad, **base)
+        with self.assertRaises(ValueError):
+            oas.command('codex', 'tutor', self.root, 'Task', retry_model='gpt-6-sol')
+        with self.assertRaises(ValueError):
+            oas.command('cursor', 'development', self.root, 'Task', retry_model='gpt-6-sol')
+        self.assertFalse((self.root / '.oas').exists())
+
+    def test_cli_doctor_escalates_retry_to_stronger_model(self):
+        args = ['doctor', 'development', '--workspace', str(self.root), '--worker-model', 'gpt-6-luna', '--worker-effort', 'high']
+        with patch.object(oas.shutil, 'which', return_value='/bin/codex'), patch.object(oas.subprocess, 'call', return_value=0) as call:
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(oas.main([*args, '--worker-retry-model', 'gpt-6-sol', '--worker-retry-effort', 'medium']), 0)
+        cmd = call.call_args.args[0]
+        layer = next(a for a in cmd if a.startswith('agents.implementor-retry.config_file='))
+        retry = tomllib.loads(Path(json.loads(layer.split('=', 1)[1])).read_text(encoding='utf-8'))
+        self.assertEqual((retry['model'], retry['model_reasoning_effort']), ('gpt-6-sol', 'medium'))
+        err = io.StringIO()
+        with patch.object(oas.shutil, 'which', return_value='/bin/codex'), patch.object(oas.subprocess, 'call', return_value=0) as call:
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(oas.main([*args, '--worker-retry-effort', 'high']), 2)
+        call.assert_not_called()
+        self.assertIn('Retry effort high must be higher than worker effort high', err.getvalue())
+
     def test_cli_retry_flag_reaches_preview_and_run(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
@@ -776,6 +839,25 @@ class TokenEconomyTest(unittest.TestCase):
         self.assertIn('codex lead inherit@default worker inherit@low | 1 | 1 | 0.80', out.getvalue())
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(oas.main(['report-runs', '--output', str(self.root / 'nowhere')]), 2)
+
+    def test_retry_model_is_a_separate_logged_configuration(self):
+        worker = dict(harness='codex', mode='development', result='pass', lead_model='gpt-6-sol', lead_effort='medium',
+                      worker_model='gpt-6-luna', worker_effort='high')
+        oas.log_run(self.root, task='t1', retry_effort='xhigh', cost_usd=1, **worker)
+        oas.log_run(self.root, task='t1', retry_model='gpt-6-sol', retry_effort='medium', cost_usd=2, **worker)
+        oas.log_run(self.root, task='t2', retry_model='gpt-6-sol', cost_usd=3, **worker)
+        with self.assertRaises(ValueError):
+            oas.log_run(self.root, task='t3', retry_model='bad model', **worker)
+        report = oas.report_runs(self.root)
+        self.assertIn('worker gpt-6-luna@high->xhigh | 1 | 1 | 1.00', report)
+        self.assertIn('worker gpt-6-luna@high->gpt-6-sol@medium | 1 | 1 | 2.00', report)
+        self.assertIn('worker gpt-6-luna@high->gpt-6-sol@high | 1 | 1 | 3.00', report)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(oas.main(['log-run', '--output', str(self.root), '--task', 't4', '--harness', 'codex', '--mode', 'development',
+                                       '--result', 'pass', '--worker-model', 'gpt-6-luna', '--worker-effort', 'high',
+                                       '--retry-model', 'gpt-6-sol', '--retry-effort', 'medium']), 0)
+        self.assertEqual(json.loads(out.getvalue())['retry_model'], 'gpt-6-sol')
 
 
 class RetrospectiveTest(unittest.TestCase):

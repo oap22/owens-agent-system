@@ -224,23 +224,28 @@ def role(name):
     return tomllib.loads(read(ROOT / f'config/agents/{name}.toml'))
 
 
-def delegation(mode, lead_effort=None, worker_model=None, worker_effort=None, retry_effort=None):
+def delegation(mode, lead_effort=None, worker_model=None, worker_effort=None, retry_effort=None, retry_model=None):
     """Validate lead/worker options; return (lead_effort, worker) where worker is a dict or None.
 
-    WORKER carries the implementor's model and effort. When RETRY_EFFORT is given it also carries
-    'retry': the effort of a second rung, same model, that the lead re-sends a failed packet to once
-    before taking the slice itself."""
+    WORKER carries the implementor's model and effort. A second rung, which the lead re-sends a
+    failed packet to once before taking the slice itself, adds 'retry' (its effort) and/or
+    'retry_model' (its model). On the worker's own model the rung must raise effort. On a
+    different RETRY_MODEL it may use any effort, and keeps the worker's when RETRY_EFFORT is omitted."""
     for value in (lead_effort, worker_effort, retry_effort):
         if value is not None and value not in EFFORTS:
             raise ValueError(f'Effort must be one of {", ".join(EFFORTS)}')
-    if worker_model is not None and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:-]*', worker_model):
-        raise ValueError('Worker model must be a plain alias or model identifier')
-    if retry_effort is not None:
+    for label, value in (('Worker', worker_model), ('Worker retry', retry_model)):
+        if value is not None and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:-]*', value):
+            raise ValueError(f'{label} model must be a plain alias or model identifier')
+    if retry_model is not None and retry_model == worker_model and retry_effort is None:
+        raise ValueError(f'Retry model {retry_model} is the worker model; choose a different --worker-retry-model or add a higher --worker-retry-effort')
+    if retry_effort is not None and (retry_model is None or retry_model == worker_model):
         if worker_effort is None:
             raise ValueError('--worker-retry-effort needs --worker-effort so the retry rung is above the first attempt')
         if EFFORTS.index(retry_effort) <= EFFORTS.index(worker_effort):
             raise ValueError(f'Retry effort {retry_effort} must be higher than worker effort {worker_effort}')
-    worker = {k: v for k, v in (('model', worker_model), ('effort', worker_effort), ('retry', retry_effort)) if v is not None}
+    worker = {k: v for k, v in (('model', worker_model), ('effort', worker_effort), ('retry', retry_effort),
+                                ('retry_model', retry_model)) if v is not None}
     if worker and not config(mode).get('agents', {}).get('enabled', False):
         raise ValueError(f'{mode} disables delegation; worker options are not allowed')
     return lead_effort, worker or None
@@ -250,17 +255,29 @@ def worker_rungs(worker):
     """(role name, {model, effort}) per implementor rung: the first attempt and, when configured, the retry."""
     worker = dict(worker or {})
     retry = worker.pop('retry', None)
+    retry_model = worker.pop('retry_model', None)
     rungs = [(IMPLEMENTOR, worker)]
-    if retry is not None:
-        rungs.append((IMPLEMENTOR_RETRY, dict(worker, effort=retry)))
+    if retry is not None or retry_model is not None:
+        rung = dict(worker)
+        if retry_model is not None:
+            rung['model'] = retry_model
+        if retry is not None:
+            rung['effort'] = retry
+        rungs.append((IMPLEMENTOR_RETRY, rung))
     return rungs
 
 
-def rung_description(name):
+def rung_description(name, worker=None):
     base = config('development')['agents'][IMPLEMENTOR]['description']
     if name == IMPLEMENTOR:
         return base
-    return 'Second rung for one packet that failed on implementor: same role and model at higher effort. Use once per packet, then the lead takes the slice.'
+    worker = worker or {}
+    retry_model = worker.get('retry_model')
+    if retry_model is None or retry_model == worker.get('model'):
+        escalation = 'same role and model at higher effort'
+    else:
+        escalation = f'same role escalated to model {retry_model}'
+    return f'Second rung for one packet that failed on implementor: {escalation}. Use once per packet, then the lead takes the slice.'
 
 
 def implementor_agent(worker):
@@ -268,7 +285,7 @@ def implementor_agent(worker):
     layer = role(IMPLEMENTOR)
     agents = {}
     for name, options in worker_rungs(worker):
-        spec = dict(description=rung_description(name), prompt=layer['developer_instructions'].strip(),
+        spec = dict(description=rung_description(name, worker), prompt=layer['developer_instructions'].strip(),
                     tools=list(IMPLEMENTOR_TOOLS), maxTurns=IMPLEMENTOR_MAX_TURNS)
         spec.update(options)
         agents[name] = spec
@@ -282,7 +299,7 @@ def implementor_overlays(workspace, worker, materialize=True):
     for name, options in worker_rungs(worker):
         result[name] = {'config_file': str(implementor_overlay(workspace, options, name, materialize))}
         if name not in registered:
-            result[name]['description'] = rung_description(name)
+            result[name]['description'] = rung_description(name, worker)
     return result
 
 
@@ -323,7 +340,7 @@ def implementor_overlay(workspace, worker, name=IMPLEMENTOR, materialize=True):
     return path
 
 
-def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=None, worker_model=None, worker_effort=None, model=None, retry_effort=None, materialize=True):
+def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=None, worker_model=None, worker_effort=None, model=None, retry_effort=None, retry_model=None, materialize=True):
     workspace = workspace_path(workspace)
     if model is not None and not re.fullmatch(MODEL_PATTERN, model):
         raise ValueError('Model must be a plain alias or model identifier')
@@ -336,7 +353,7 @@ def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=
     # prompt, agents that need one get DEFAULT_TASK.
     open_session = not task.strip()
     message = prompt(mode, DEFAULT_TASK if open_session else task, include)
-    lead_effort, worker = delegation(mode, lead_effort, worker_model, worker_effort, retry_effort)
+    lead_effort, worker = delegation(mode, lead_effort, worker_model, worker_effort, retry_effort, retry_model)
     if agent not in AGENTS or agent == 'generic':
         raise ValueError('Generic agents use bundle, not run; select a native adapter')
     if mode == 'unattended' and agent != 'codex':
@@ -580,6 +597,8 @@ def log_run(output, **fields):
     for key in ('lead_effort', 'worker_effort', 'retry_effort'):
         if fields.get(key) is not None and fields[key] not in EFFORTS:
             raise ValueError(f'{key} must be one of {", ".join(EFFORTS)}')
+    if fields.get('retry_model') is not None and (not isinstance(fields['retry_model'], str) or not re.fullmatch(MODEL_PATTERN, fields['retry_model'])):
+        raise ValueError('retry_model must be a plain alias or model identifier')
     for key in ('packets', 'escalated', 'corrections'):
         value = fields.get(key, 0)
         if type(value) is not int or value < 0:
@@ -594,7 +613,7 @@ def log_run(output, **fields):
         raise ValueError('escalated packets cannot exceed packets')
     record = dict(schema_version=1, at=datetime.now(timezone.utc).isoformat(timespec='seconds'))
     for key in ('task', 'harness', 'mode', 'lead_model', 'lead_effort', 'worker_model', 'worker_effort', 'retry_effort',
-                'packets', 'escalated', 'result', 'cost_usd', 'minutes', 'corrections', 'notes'):
+                'retry_model', 'packets', 'escalated', 'result', 'cost_usd', 'minutes', 'corrections', 'notes'):
         record[key] = fields.get(key)
     for key in ('cohort', 'runtime_version'):
         value = fields.get(key)
@@ -612,7 +631,7 @@ def configuration_key(record):
     """Keep configuration identity separate from its human-readable label."""
     return tuple(record.get(field) for field in (
         'mode', 'cohort', 'harness', 'runtime_version', 'lead_model', 'lead_effort',
-        'worker_model', 'worker_effort', 'retry_effort'))
+        'worker_model', 'worker_effort', 'retry_effort', 'retry_model'))
 
 
 def configuration_label(record):
@@ -620,10 +639,12 @@ def configuration_label(record):
     prefix = f'{record.get("mode", "unknown")} / {record.get("cohort") or "unspecified"} / {record["harness"]}'
     if record.get('runtime_version'):
         prefix += f' [runtime {record["runtime_version"]}]'
-    if not record.get('worker_model') and not record.get('worker_effort'):
+    if not any(record.get(key) for key in ('worker_model', 'worker_effort', 'retry_model')):
         return f'{prefix} lead {lead} alone'
     worker = f"{record.get('worker_model') or 'inherit'}@{record.get('worker_effort') or 'default'}"
-    if record.get('retry_effort'):
+    if record.get('retry_model'):
+        worker += f"->{record['retry_model']}@{record.get('retry_effort') or record.get('worker_effort') or 'default'}"
+    elif record.get('retry_effort'):
         worker += f"->{record['retry_effort']}"
     return f'{prefix} lead {lead} worker {worker}'
 
@@ -941,6 +962,8 @@ def check(skills_root=None):
     json.loads(implementor_agent({'effort': 'low'}))
     if set(json.loads(implementor_agent({'effort': 'low', 'retry': 'medium'}))) != {IMPLEMENTOR, IMPLEMENTOR_RETRY}:
         raise ValueError('The implementor retry rung must render alongside the first rung')
+    if json.loads(implementor_agent({'model': 'worker', 'effort': 'high', 'retry_model': 'lead'}))[IMPLEMENTOR_RETRY]['model'] != 'lead':
+        raise ValueError('The implementor retry rung must carry its escalated model')
     template = read(ROOT / RETRO_TEMPLATE)
     if not template.startswith(RETRO_TITLE) or list(parse_retro(template)[2]) != list(RETRO_SECTIONS) or not template_placeholders():
         raise ValueError('templates/retrospective.md must keep the title line, the four sections in order, and its placeholders')
@@ -965,12 +988,13 @@ def launch_options(parser):
     parser.add_argument('--lead-effort', choices=EFFORTS, help='Lead reasoning effort (codex and claude only)')
     parser.add_argument('--worker-model', help='Implementor model (codex and claude only)')
     parser.add_argument('--worker-effort', choices=EFFORTS, help='Implementor reasoning effort (codex and claude only)')
-    parser.add_argument('--worker-retry-effort', choices=EFFORTS, help='Higher effort for one implementor retry')
+    parser.add_argument('--worker-retry-effort', choices=EFFORTS, help='Effort for one implementor retry; must be higher unless the retry model differs')
+    parser.add_argument('--worker-retry-model', help='Model for one implementor retry, to escalate a failed packet to a stronger model')
 
 
 def selected_options(args):
     return dict(model=args.model, lead_effort=args.lead_effort, worker_model=args.worker_model,
-                worker_effort=args.worker_effort, retry_effort=args.worker_retry_effort)
+                worker_effort=args.worker_effort, retry_effort=args.worker_retry_effort, retry_model=args.worker_retry_model)
 
 
 def main(argv=None):
@@ -994,6 +1018,7 @@ def main(argv=None):
     p.add_argument('--result', required=True, choices=RUN_RESULTS)
     p.add_argument('--lead-model'); p.add_argument('--lead-effort', choices=EFFORTS)
     p.add_argument('--worker-model'); p.add_argument('--worker-effort', choices=EFFORTS); p.add_argument('--retry-effort', choices=EFFORTS)
+    p.add_argument('--retry-model', help='Model of the retry rung when it differs from the worker model')
     p.add_argument('--packets', type=int, default=0, help='Packets delegated')
     p.add_argument('--escalated', type=int, default=0, help='Packets that hit their budget and came back to the lead or the retry rung')
     p.add_argument('--cost-usd', type=float, help='Session cost as the harness reports it; omit when unknown')
@@ -1083,7 +1108,7 @@ def main(argv=None):
         elif args.action == 'log-run':
             record = log_run(args.output, task=args.task, harness=args.harness, mode=args.mode, result=args.result,
                              lead_model=args.lead_model, lead_effort=args.lead_effort, worker_model=args.worker_model,
-                             worker_effort=args.worker_effort, retry_effort=args.retry_effort, packets=args.packets,
+                             worker_effort=args.worker_effort, retry_effort=args.retry_effort, retry_model=args.retry_model, packets=args.packets,
                              escalated=args.escalated, cost_usd=args.cost_usd, minutes=args.minutes,
                              corrections=args.corrections, notes=args.notes, cohort=args.cohort,
                              runtime_version=args.runtime_version)
@@ -1117,7 +1142,7 @@ def main(argv=None):
             print(f'shared guidance {"included" if include else "omitted"}: {reason}', file=sys.stderr)
             sizes = prompt_sizes(args.mode, args.task or DEFAULT_TASK, include)
             print(f'estimated tokens sent: guidance {sizes["guidance"]}, task {sizes["task"]} (characters/{CHARS_PER_TOKEN}; the harness adds its own system prompt and tools)', file=sys.stderr)
-            if args.agent == 'codex' and (args.worker_model or args.worker_effort):
+            if args.agent == 'codex' and (args.worker_model or args.worker_effort or args.worker_retry_model):
                 print('Role snapshot paths are planned only; use run or doctor to create them.', file=sys.stderr)
             print(shlex.join(cmd))
         else:
