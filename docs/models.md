@@ -1,10 +1,12 @@
 # Current models and runtime selection
 
-Reviewed 2026-09-15 against official documentation and installed CLI metadata. These are explicit choices and evaluation starting points, not hardcoded defaults or claims of optimal performance. OAS inherits the user's model unless `--model` is supplied.
+Reviewed 2026-09-24 against official documentation and installed CLI metadata. These are explicit choices and evaluation starting points, not hardcoded defaults or claims of optimal performance. OAS inherits the user's model unless `--model` is supplied.
 
 | Model | Exact ID | Starting point |
 |---|---|---|
 | GPT-6 Astra | `gpt-6-astra` | Complex coding, reasoning, research, and agentic work. Preserve supported effort; compare `medium` and `high` on representative tasks. |
+| GPT-6 Sol | `gpt-6-sol` | Codex lead and reviewer: planning, tool use, validation, and follow-through. Start at `medium`. |
+| GPT-6 Luna | `gpt-6-luna` | Codex subagents for exploration and closed packets (named files, settled acceptance criteria, a test command). Start at `high`. |
 | Claude Opus 5 | `claude-opus-5` | General Claude coding and agentic baseline. Start at documented `high`, then evaluate lower effort for routine work. |
 | Claude Fable 5.1 | `claude-fable-5-1` | Demanding reasoning and long-horizon work, including cases where Opus still misses acceptance criteria at higher effort. Start at documented `high`. |
 
@@ -12,7 +14,13 @@ Reviewed 2026-09-15 against official documentation and installed CLI metadata. T
 
 [Anthropic's Fable overview](https://platform.claude.com/docs/en/models/fable-5-1/overview) recommends Opus 5 for most workloads and Fable for harder work. [Its effort guide](https://platform.claude.com/docs/en/build-with-claude/effort) calls for fresh evaluation after upgrades. Opus 5's base API rates are $5/$25 per million input/output tokens; Fable 5.1's are $10/$50 with $0.25 cache reads. These are API rates, not subscription accounting or cost-per-task predictions.
 
-For independent workers, evaluate lower effort on the selected model before assuming a smaller model wins. Candidate worker IDs such as `gpt-5.6-luna` or `claude-sonnet-5` require account and runtime support. Record the effective model and effort.
+API rates per million input/output tokens: Astra $10/$50, Sol $2/$10, Luna $0.10/$0.50; all three share a 1.05M context and the same tool set ([Sol](https://developers.openai.com/api/docs/models/gpt-6-sol), [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)). Per-token price overstates the gap: Artificial Analysis measured Astra at about 2.4x Sol per coding task because it spends fewer tokens. Capability drops sharply on open-ended work (Terminal-Bench 4.0: Astra 59%, Sol 43%, Luna 13%) but much less on bounded fixes, so whether a packet is closed decides whether Luna can take it.
+
+[OpenAI's Codex subagent guide](https://learn.chatgpt.com/docs/agent-configuration/subagents) assigns Sol to agents that plan, validate, and follow through, and Luna to narrow, repeatable, high-volume work; its example pairs a Luna explorer at `high` with a Sol reviewer at `medium`. It does not say which model should run the parent thread. The Sol-lead, Luna-worker split used here is a design choice to evaluate, not vendor guidance. Nobody has published a controlled comparison against Sol or Astra alone.
+
+Codex subagents inherit the parent's model and effort unless configured. Set `[agents] default_subagent_model` and `default_subagent_reasoning_effort` in `~/.codex/config.toml` (present in CLI 0.156.1), or `model` in a `~/.codex/agents/*.toml` file for one role. After CLI 0.144, users reported subagents ignoring their configured model, so confirm the effective model in session logs. Luna cannot run Codex's `ultra` effort, the level that delegates to subagents without being asked.
+
+For independent workers, compare a cheaper model against lower effort on the lead model; neither wins by default. When a Luna packet fails its acceptance check, escalate it to Sol at `medium` rather than retrying on Luna. `claude-sonnet-5` is the Claude-side worker candidate. Record the effective model and effort.
 
 ## Prompting implications
 
@@ -30,8 +38,8 @@ Use `OAS_CODEX_BIN` or `OAS_CLAUDE_BIN` for explicit executable paths. The UI ca
 
 ```sh
 python3 scripts/oas.py doctor development --workspace /path/to/worktree \
-  --model gpt-6-astra --lead-effort high \
-  --worker-model gpt-5.6-luna --worker-effort low --worker-retry-effort medium
+  --model gpt-6-sol --lead-effort medium \
+  --worker-model gpt-6-luna --worker-effort high --worker-retry-effort xhigh
 python3 scripts/oas.py preview development --agent claude --workspace /path/to/worktree \
   --model claude-fable-5-1 --lead-effort high --task 'Implement the criteria in .oas/task.json'
 ```
