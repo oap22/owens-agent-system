@@ -51,6 +51,8 @@ IMPLEMENTOR_MAX_TURNS = 30
 # It is an estimate, not a tokenizer. The budget is a warning threshold for prompt drift.
 CHARS_PER_TOKEN = 3.2
 GUIDANCE_BUDGET_TOKENS = 3500
+# Canonical skills checkout, newest layout first; the routing drift check uses the first that exists.
+SKILLS_ROOTS = ('code/me/skills/skills', 'Developer/active/personal/skills/skills')
 TOKEN_CALIBRATION = 'evals/token-calibration.json'
 RUN_RESULTS = ('pass', 'fail', 'partial')
 RUN_LOG = 'evals/runs.jsonl'
@@ -972,7 +974,9 @@ def check(skills_root=None):
     sizes, over = guidance_report()
     for mode in over:
         print(f'WARNING: {mode} guidance with shared prompts is about {sizes[mode]} tokens, over the {GUIDANCE_BUDGET_TOKENS} budget; trim before every launch pays for it', file=sys.stderr)
-    skills_root = Path.home() / 'Developer/active/personal/skills/skills' if skills_root is None else Path(skills_root)
+    if skills_root is None:
+        skills_root = next((Path.home() / r for r in SKILLS_ROOTS if (Path.home() / r).is_dir()), Path.home() / SKILLS_ROOTS[0])
+    skills_root = Path(skills_root)
     if skills_root.is_dir():
         for name in sorted(routed_skills()):
             if not (skills_root / name).is_dir():
@@ -1001,7 +1005,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='action', required=True)
     p = sub.add_parser('check')
-    p.add_argument('--skills-root', help='Skills directory for routing drift check (default: ~/Developer/active/personal/skills/skills)')
+    p.add_argument('--skills-root', help='Skills directory for routing drift check (default: ~/code/me/skills/skills, else the older ~/Developer/active/personal/skills/skills)')
     for name in ('preview', 'run'):
         p = sub.add_parser(name)
         p.add_argument('mode', choices=MODES)

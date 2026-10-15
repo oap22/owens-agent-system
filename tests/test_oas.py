@@ -469,6 +469,21 @@ class OASTest(unittest.TestCase):
             self.assertEqual(oas.main(['check', '--skills-root', str(self.root / 'absent')]), 0)
         self.assertIn('skills repo not present; routing check skipped', err.getvalue())
 
+    def test_skill_routing_default_root_prefers_current_layout(self):
+        home = self.root / 'home'
+        (home / 'Developer/active/personal/skills/skills').mkdir(parents=True)
+        current = home / 'code/me/skills/skills'
+        current.mkdir(parents=True)
+        err = io.StringIO()
+        with patch.object(oas.Path, 'home', return_value=home), contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            oas.check()
+        self.assertIn(f'has no directory under {current}', err.getvalue())
+        current.rmdir()
+        err = io.StringIO()
+        with patch.object(oas.Path, 'home', return_value=home), contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            oas.check()
+        self.assertIn('has no directory under ' + str(home / 'Developer/active/personal/skills/skills'), err.getvalue())
+
     def test_lead_effort_maps_per_harness(self):
         cmd = oas.command('codex', 'development', self.root, 'Task', lead_effort='xhigh')
         self.assertIn('model_reasoning_effort="xhigh"', cmd)
