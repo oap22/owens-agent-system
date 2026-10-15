@@ -24,7 +24,7 @@
 
 ## Proposed change
 
-Summary: <one sentence naming the change; it becomes the issue title. Write exactly "No change proposed." to skip the issue>
+Summary: <one sentence naming the change, preferring a check, script, or test over new instruction text; it becomes the issue title. Write exactly "No change proposed." to skip the issue>
 
 Why: <what the change prevents, using a failure above as the example>
 
