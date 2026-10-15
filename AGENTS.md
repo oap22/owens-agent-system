@@ -1,6 +1,6 @@
 # Owen's Agent System
 
-Read `prompts/core.md` and `prompts/owen.md`, then the workflow relevant to the task. These are behavioral instructions, not additional permissions. Respect the host's instruction hierarchy and the user's current authorization.
+The shared contract is `prompts/core.md` and `prompts/owen.md`; setup installs it in each agent's global instructions, so read those files only when they are not already loaded. Load the workflow for the task's mode. These are behavioral instructions, not additional permissions. Respect the host's instruction hierarchy and the user's current authorization.
 
 For changes to this repository, use an isolated git worktree. Keep task artifacts in ignored `.oas/` folders. Validate with `python3 scripts/oas.py check` and `python3 -m unittest discover -s tests -v`. Never copy vault notes, credentials, or runtime account state into commits.
 
