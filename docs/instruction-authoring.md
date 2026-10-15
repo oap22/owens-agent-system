@@ -23,13 +23,13 @@ The model is more tentative about stopping than its predecessors; it may finish 
 
 ## What to remove
 
-Audit each instruction file for these and delete them unless a real failure in the evaluation log justifies keeping one:
+The first test, from PStack's skill-authoring playbook: keep only text that changes a decision. Audit each instruction file for these and delete them unless a real failure in the evaluation log justifies keeping one:
 
 - Test and verification nags ("always run the tests", "double-check your work", "run the check after every change"). The model runs relevant checks on its own; the nag produces extra runs. State which check defines done instead.
 - Forced pre-reads ("always read X before starting"). Name the entry points and let the task decide.
 - Unbounded keep-going pushers ("never stop until", "do not give up"). Replace them with a definition of done and a named stopping condition.
 - Warnings, disclaimers, and safety checklists for risks the task does not present.
-- Rules repeated across several files so they "stick". A rule lives once, at the level that owns it, and other files link to it.
+- Rules repeated across several files so they "stick". A rule lives once, at the level that owns it, and other files link to it. Shared engineering, research, and learning rules live in the `*-principles` skills; prompts and workflows cite them by bold name.
 - Obsolete or contradictory guidance. When two files disagree the model may pause, change direction, or follow the rule the user did not expect. The fix is explicit authority and deletion, not another instruction.
 
 ## Authority
@@ -61,7 +61,8 @@ Run this over a file before committing a change to `prompts/`, `workflows/`, `co
 3. Does any line contradict a higher-authority file? Fix the lower file.
 4. Is the same rule stated in more than one file? Keep one, link from the others.
 5. Could the file be a router with detail loaded on demand? Move detail out.
-6. For a skill: does the description name the workflow that should trigger it, in one line, without a topic word doing the work?
-7. Run `python3 scripts/oas.py check` and compare the guidance token estimate before and after; the change should not grow it.
+6. Could a check, script, or test enforce the rule instead? Write that and delete the text.
+7. For a skill: does the description name the workflow that should trigger it, in one line, without a topic word doing the work?
+8. Run `python3 scripts/oas.py check` and compare the guidance token estimate before and after; the change should not grow it.
 
 Evidence that a removal or addition changed outcomes goes in the evaluation log, per [[evals/README]]; this checklist edits for the documented failure modes, it does not prove a prompt improved.
