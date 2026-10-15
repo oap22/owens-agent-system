@@ -123,6 +123,46 @@ class SetupTest(unittest.TestCase):
         self.assertEqual(data['compaction']['reserved'], 12000)
         self.assertEqual(data['model'], 'mine')
 
+    def test_compaction_hook_reaches_claude_and_codex_and_keeps_user_hooks(self):
+        mine = {'matcher': 'startup', 'hooks': [{'type': 'command', 'command': 'echo mine'}]}
+        stale = {'matcher': 'compact', 'hooks': [{'type': 'command', 'command': '/old/python /old/clone/scripts/oas.py compact-context'}]}
+        p = self.home / '.claude/settings.json'
+        p.parent.mkdir()
+        p.write_text(json.dumps({'model': 'mine', 'hooks': {'SessionStart': [mine, stale], 'Stop': [mine]}}))
+        changes = m.plan(self.home, self.source)
+        after = {str(t.relative_to(self.home)): json.loads(a) for t, _, a, _ in changes if t.name.endswith('.json')}
+        for relative in m.COMPACTION_HOOK_FILES:
+            groups = after[relative]['hooks']['SessionStart']
+            ours = [g for g in groups if g['matcher'] == 'compact']
+            self.assertEqual(len(ours), 1, relative)
+            self.assertEqual(ours[0]['hooks'][0]['command'], m.compaction_hook(self.source))
+        claude = after['.claude/settings.json']
+        self.assertEqual(claude['model'], 'mine')
+        self.assertIn(mine, claude['hooks']['SessionStart'])
+        self.assertEqual(claude['hooks']['Stop'], [mine])
+        self.assertNotIn(stale, claude['hooks']['SessionStart'])
+        m.apply(changes, self.home)
+        self.assertEqual(m.plan(self.home, self.source), [])
+
+    def test_malformed_hooks_refused(self):
+        p = self.home / '.codex/hooks.json'
+        p.parent.mkdir()
+        p.write_text(json.dumps({'hooks': {'SessionStart': {'matcher': 'compact'}}}))
+        with self.assertRaises(ValueError):
+            m.plan(self.home, self.source)
+        self.assertEqual(json.loads(p.read_text()), {'hooks': {'SessionStart': {'matcher': 'compact'}}})
+
+    def test_installed_compaction_hook_runs(self):
+        cwd = self.home / 'project'
+        task = cwd / '.oas/t1/task.json'
+        task.parent.mkdir(parents=True)
+        task.write_text(json.dumps({'status': 'active', 'checkpoint': {'phase': 'build', 'next_action': 'Run tests'}}))
+        out = subprocess.run(m.shlex.split(m.compaction_hook(self.source)), input=json.dumps({'cwd': str(cwd), 'source': 'compact'}),
+                             capture_output=True, text=True, check=True).stdout
+        self.assertIn('Context was just compacted', out)
+        self.assertIn(str(task), out)
+        self.assertIn('Run tests', out)
+
     def test_markers_and_paths_come_from_oas(self):
         self.assertEqual((m.START,m.END),(m.oas.MANAGED_START,m.oas.MANAGED_END))
         targets={str(t.relative_to(self.home)) for t,_,_,_ in m.plan(self.home,self.source)}
@@ -172,7 +212,7 @@ class SetupTest(unittest.TestCase):
         actions=m.rollback_plan(self.home,backup)
         # one global instruction file per agent, one Codex profile per mode,
         # the three settings patches, and the oas launcher
-        self.assertEqual(len(actions),len(m.oas.GLOBAL_INSTRUCTIONS)+len(m.oas.MODES)+3+1)
+        self.assertEqual(len(actions),len(m.oas.GLOBAL_INSTRUCTIONS)+len(m.oas.MODES)+4+1)
         self.assertEqual(self.snapshot(),before)
         out=subprocess.run([sys.executable,str(self.source/'scripts/setup.py'),'--home',str(self.home),'--rollback',str(backup)],capture_output=True,text=True,check=True).stdout
         self.assertIn('restore: .claude/CLAUDE.md',out);self.assertIn('remove: .codex/AGENTS.md',out);self.assertIn('preview only',out)

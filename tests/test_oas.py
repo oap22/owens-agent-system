@@ -130,6 +130,26 @@ class OASTest(unittest.TestCase):
         covered = {item['mode'] for item in oas.scenarios() if item['id'].startswith('compact-')}
         self.assertEqual(covered, set(oas.MODES))
 
+    def test_compact_context_lists_only_open_checkpoints(self):
+        for name, status in (('a', 'active'), ('b', 'complete'), ('c', 'blocked')):
+            path = self.root / '.oas' / name / 'task.json'
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps({'status': status, 'checkpoint': {'phase': 'p', 'next_action': f'next {name}'}}))
+        (self.root / '.oas/d').mkdir()
+        (self.root / '.oas/d/task.json').write_text('{not json')
+        text = oas.compact_context(self.root)
+        self.assertTrue(text.startswith(oas.COMPACT_REMINDER))
+        self.assertIn('next a', text)
+        self.assertIn('next c', text)
+        self.assertNotIn('next b', text)
+        self.assertIn('Unreadable task checkpoint', text)
+        self.assertEqual(oas.compact_context(self.root / 'none'), oas.COMPACT_REMINDER)
+
+    def test_hook_workspace_reads_cwd_and_falls_back(self):
+        self.assertEqual(oas.hook_workspace(io.StringIO(json.dumps({'cwd': '/x'}))), '/x')
+        for bad in ('', 'not json', '[1]', '{"cwd": 3}'):
+            self.assertEqual(oas.hook_workspace(io.StringIO(bad)), oas.os.getcwd(), bad)
+
     def test_native_tutor_controls(self):
         self.assertIn('plan', oas.command('claude', 'tutor', self.root, 'Teach me'))
         self.assertIn('ask', oas.command('cursor', 'tutor', self.root, 'Teach me'))

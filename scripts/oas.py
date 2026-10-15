@@ -482,6 +482,38 @@ def new_task(mode, output, title, criteria, scenario_id=None):
     return folder
 
 
+COMPACT_REMINDER = ('Context was just compacted. The summary is lossy and is not evidence. Reload the task '
+                    'checkpoint and relevant instructions, reverify volatile files, git state, tests, accounts, '
+                    'and remote state, then continue from the next incomplete criterion.')
+
+
+def compact_context(workspace):
+    """Post-compaction text for native hooks: the reminder plus open task checkpoints in WORKSPACE/.oas."""
+    lines = [COMPACT_REMINDER]
+    root = Path(workspace).expanduser() / '.oas'
+    for path in sorted(root.glob('*/task.json')) if root.is_dir() else []:
+        try:
+            data = json.loads(read(path))
+            checkpoint = data.get('checkpoint') or {}
+            if data.get('status') == 'complete':
+                continue
+            lines.append(f'Open task checkpoint: {path} (status {data.get("status")}, phase {checkpoint.get("phase")}, '
+                         f'next action: {checkpoint.get("next_action")})')
+        except (OSError, ValueError, AttributeError):
+            lines.append(f'Unreadable task checkpoint: {path}')
+    return '\n'.join(lines)
+
+
+def hook_workspace(stdin):
+    """Native hooks send JSON with the session cwd on stdin; fall back to the process cwd."""
+    try:
+        data = json.loads(stdin.read() or '{}') if not stdin.isatty() else {}
+        cwd = data.get('cwd') if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        cwd = None
+    return cwd if isinstance(cwd, str) and cwd else os.getcwd()
+
+
 def validate_task(path):
     path = Path(path).resolve(strict=True)
     data = json.loads(read(path))
@@ -1073,6 +1105,8 @@ def main(argv=None):
     p.add_argument('--scenario', help='Take mode, title, and criteria from this evals/scenarios.json id')
     p = sub.add_parser('verify-task')
     p.add_argument('path')
+    p = sub.add_parser('compact-context', help='Print post-compaction guidance; native hooks call this after compaction')
+    p.add_argument('--workspace', help='Project to scan for .oas/*/task.json (default: hook stdin cwd, then current directory)')
     p = sub.add_parser('ui')
     p.add_argument('--plain', action='store_true', help='Disable rain and color; monochrome panels')
     argv = interactive_default(sys.argv[1:] if argv is None else argv)
@@ -1090,6 +1124,8 @@ def main(argv=None):
                 print('\n'.join(errors), file=sys.stderr)
                 return 1
             print('PASS: record structure and evidence files; semantic correctness not assessed')
+        elif args.action == 'compact-context':
+            print(compact_context(args.workspace or hook_workspace(sys.stdin)))
         elif args.action == 'bundle':
             include, _ = shared_decision(args.agent, args.shared)
             print(bundle(args.mode, args.agent, args.output, args.task, include))

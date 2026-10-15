@@ -10,11 +10,27 @@ Reviewed 2026-09-07 against official documentation and the locally installed CLI
 
 | Agent | Automatic behavior | Manual command | OAS behavior |
 |---|---|---|---|
-| Codex | Uses the selected model's native auto-compaction limit; an absolute `model_auto_compact_token_limit` override exists | `/compact` | Inherits the model-aware native limit; no fixed override |
-| Claude Code | Automatically compacts near its effective window | `/compact [focus]` | Passes `--autocompact auto` explicitly |
+| Codex | Uses the selected model's native auto-compaction limit; an absolute `model_auto_compact_token_limit` override exists | `/compact` | Inherits the model-aware native limit; no fixed override; global post-compaction hook |
+| Claude Code | Automatically compacts near its effective window | `/compact [focus]` | Passes `--autocompact auto` explicitly; global post-compaction hook |
 | Cursor Agent | Automatically summarizes older messages near capacity | `/summarize` (`/compress`) | Inherits native behavior; `preCompact` is observational and cannot change the trigger |
 | GitHub Copilot CLI | Begins background compaction at about 80 percent and waits at about 95 percent if needed | `/compact [focus]` | Inherits native behavior and its saved compaction checkpoints |
 | OpenCode | `compaction.auto` defaults to true and reserves room for compaction | `/compact` (`/summarize`) | Setup explicitly enables the global setting while preserving siblings; no project config is overwritten |
+
+## Post-compaction hook for every session
+
+The launcher reaches only sessions that `oas run` starts. Setup therefore also installs a native `SessionStart` hook with matcher `compact` in `~/.claude/settings.json` and `~/.codex/hooks.json`. Both runtimes add the hook's plain stdout to the model's context after automatic or manual compaction, so plain `claude`, the Claude desktop app's Code tab, and plain `codex` get the same continuity step. The hook runs `oas.py compact-context`, which prints the reload-and-reverify reminder and lists each open `.oas/*/task.json` checkpoint in the session's working directory (taken from the hook's stdin `cwd`). Setup keeps other hooks and replaces an older OAS hook in place. Codex asks the user to review and trust a new hook once through `/hooks`.
+
+| Agent | Post-compaction injection | OAS status |
+|---|---|---|
+| Claude Code | `SessionStart` matcher `compact` | Installed |
+| Codex | `SessionStart` matcher `compact`; must be trusted once | Installed |
+| OpenCode | `experimental.session.compacting` plugin hook adds text to the compaction prompt | Not installed: experimental API, not validated here |
+| pi | `session_before_compact` extension event can replace the summary | Not installed: OAS has no pi adapter yet |
+| Gemini CLI | `PreCompress` only shows a message to the user; no post-compression event | Not possible; global GEMINI.md guidance only |
+| Cursor Agent | `preCompact` is observational | Not possible; global rule only |
+| Copilot CLI | `preCompact` is notification only | Not possible; global instructions only |
+
+Hook behavior was checked against official documentation on 2026-10-15. Unit tests prove the installed command and its output; they do not prove that a given client version fires the hook.
 
 Use the manual command before a large new phase of the same task when the current session is already full of exploration. Start a fresh session when the objective changes, the session has accumulated repeated wrong turns, or the compacted summary no longer contains enough trustworthy state.
 
@@ -45,6 +61,7 @@ For bounded specialist work, needing repeated compaction is a signal that the ta
 - [Claude Code context window](https://code.claude.com/docs/en/context-window) documents automatic and focused manual compaction, reinjected instructions, recent-file reload, and limits on what survives.
 - [Cursor summarization](https://docs.cursor.com/en/agent/chat/summarization), [CLI slash commands](https://prod.cursor.com/docs/cli/reference/slash-commands), and [hooks](https://prod.cursor.com/docs/hooks) document automatic summarization, `/summarize`, and the observational `preCompact` event.
 - [GitHub Copilot CLI context management](https://docs.github.com/en/copilot/concepts/agents/copilot-cli/context-management) documents the approximately 80/95 percent background behavior, structured summaries, and checkpoints.
+- [Claude Code hooks](https://code.claude.com/docs/en/hooks) and [Codex hooks](https://learn.chatgpt.com/docs/hooks) document the `compact` session-start source and plain-stdout context injection; Codex documents hook trust. [Gemini CLI hooks](https://geminicli.com/docs/hooks/reference/), [Copilot hooks](https://docs.github.com/en/copilot/reference/hooks-reference), [OpenCode plugins](https://opencode.ai/docs/plugins/), and [pi extensions](https://pi.dev/docs/latest/extensions) document their compaction events.
 - [OpenCode configuration](https://dev.opencode.ai/docs/config) documents automatic compaction, pruning, and reserved token space. Local help and resolved configuration still need validation after client upgrades.
 
 These product behaviors can change with client versions and model catalogs. OAS checks prompt and command construction locally; it does not claim cross-provider summary quality or identical preservation behavior without end-to-end evaluation.

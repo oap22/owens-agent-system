@@ -45,6 +45,29 @@ def merged(base, overlay):
     return out
 
 
+COMPACTION_HOOK_FILES = ('.claude/settings.json', '.codex/hooks.json')
+
+
+def compaction_hook(source):
+    return shlex.join([sys.executable, str(Path(source) / 'scripts/oas.py'), 'compact-context'])
+
+
+def with_hook(config, command):
+    """Add the OAS SessionStart compact hook; keep every other hook and replace an older OAS one."""
+    if not isinstance(config.get('hooks', {}), dict) or not isinstance(config.get('hooks', {}).get('SessionStart', []), list):
+        raise ValueError('Refusing to edit malformed hooks configuration')
+    def ours(group):
+        handlers = group.get('hooks') if isinstance(group, dict) else None
+        return isinstance(handlers, list) and any(
+            isinstance(h, dict) and 'oas.py' in str(h.get('command', '')) and str(h.get('command', '')).endswith('compact-context')
+            for h in handlers)
+    hooks = dict(config.get('hooks', {}))
+    groups = [g for g in hooks.get('SessionStart', []) if not ours(g)]
+    groups.append({'matcher': 'compact', 'hooks': [{'type': 'command', 'command': command}]})
+    hooks['SessionStart'] = groups
+    return {**config, 'hooks': hooks}
+
+
 def refuse_symlink(home, target, relative):
     if target.is_symlink() or any(p.is_symlink() for p in target.parents if p != home and p.is_relative_to(home)):
         raise ValueError(f'Refusing symlink target: {relative}')
@@ -89,10 +112,17 @@ def plan(home, source, runtimes=None):
             'compaction':{'auto':True},
         },
     }
+    # Claude Code (CLI and desktop app) and Codex inject a SessionStart hook's stdout
+    # after every compaction, so the continuity reminder reaches sessions that the
+    # oas launcher did not start. Codex asks the user to trust a new hook once.
+    hook = compaction_hook(source)
+    for relative in COMPACTION_HOOK_FILES:
+        patches.setdefault(relative, {})
     for relative, patch in patches.items():
-        def update(old, patch=patch):
+        def update(old, patch=patch, relative=relative):
             base = json.loads(old) if old.strip() else {}
-            return json.dumps(merged(base, patch), indent=2) + '\n'
+            out = merged(base, patch)
+            return json.dumps(with_hook(out, hook) if relative in COMPACTION_HOOK_FILES else out, indent=2) + '\n'
         add(relative, update)
     # Remember explicit runtime choices across subsequent installer runs.
     wrapper_path = home / '.local/bin/oas'
