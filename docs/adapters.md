@@ -36,6 +36,35 @@ The local setup also installs global guidance for all five agents. Installed ver
 
 After setup, `preview` and `run` default to `--shared auto`: when the target agent's global instruction file already holds the current managed block, the launcher omits `prompts/core.md` and `prompts/owen.md` and sends only the workflow and task. `--shared always` restores the full prompt; `--shared never` omits the shared files even without an installed block. `bundle` defaults to `always` because bundles usually target another machine.
 
+## Claude desktop app
+
+The Claude desktop app has three tabs. Only the **Code** tab runs Claude Code. Its local sessions use the same engine and the same configuration files as the CLI, so most of what `setup.py --apply` installs carries over. The launcher's per-session flags do not. Documentation-checked on 2026-10-15; no Desktop session was run from this repository.
+
+| OAS piece | Desktop Code tab (local session) | Why |
+|---|---|---|
+| Managed block in `~/.claude/CLAUDE.md` | Expected to load | Desktop and the CLI share CLAUDE.md memory. The docs name project files explicitly; confirm the user file by asking a Desktop session which workflow source its instructions name |
+| Workflow selection | Works through the managed block | The block names the source clone and tells the agent to read the relevant workflow; the Mac clone path must exist |
+| `~/.claude/settings.json` (`disableBypassPermissionsMode`, permission rules, hooks, `env`) | Applies | Settings files are shared |
+| Skills symlinked into `~/.claude/skills/` | Load | Local sessions load personal skills from that folder |
+| MCP servers in `~/.claude.json` or `.mcp.json` | Load | Desktop also adds servers from `claude_desktop_config.json` |
+| `--permission-mode` per OAS mode | Manual choice | Pick Auto, Manual, or Plan in the mode selector; `permissions.defaultMode` in settings sets the default for new sessions |
+| `--model`, `--effort` | Manual choice | Model dropdown and effort menu |
+| `--append-system-prompt` workflow and task | No equivalent | Desktop has no flag input; the managed block covers workflow selection |
+| `--agents` inline `implementor` rungs | No equivalent | Desktop has no inline agents flag; a file in `~/.claude/agents/` would be needed |
+| `--settings adapters/claude/settings.json` | No equivalent | Only the global settings file applies |
+| `--autocompact auto` | Native default | Desktop compacts automatically and accepts `/compact` |
+| `oas` launcher and `oas ui` | Terminal only | `claude --desktop` opens Desktop on a folder but passes none of these flags |
+
+Other tabs and environments differ:
+
+- **Chat** has no file access and reads no `~/.claude` files.
+- **Cowork** takes skills, plugins, and connectors from the claude.ai account's Customize settings, not from `~/.claude`. Upload a skill there to use it in Cowork.
+- **SSH** sessions read `~/.claude` on the remote host. **Cloud** sessions use the repository's own configuration.
+- On macOS the app reads the shell profile for `PATH` only. Put other variables for hooks or tools in the app's local environment editor or in `env` in `~/.claude/settings.json`.
+- `/permissions` and other dialog commands are not available in the Code tab. Edit settings files directly.
+
+The Code tab runs its own copy of Claude Code, updated with the app. Its version can differ from the terminal `claude`; check it with `/status` before relying on a feature that needs a minimum version.
+
 ## Context compaction
 
 OAS does not disable native automatic compaction. Claude receives the explicit `--autocompact auto` launch setting, and setup enables OpenCode's `compaction.auto` while preserving sibling settings. Codex, Cursor, and Copilot use their native model-aware defaults because they do not expose an equivalent portable launch flag. OAS does not overwrite a target project's OpenCode or Cursor configuration or set Codex's absolute token limit. Manual commands, checkpoint requirements, current sources, and provider limits are recorded in [[docs/compaction]].
