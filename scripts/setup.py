@@ -55,7 +55,7 @@ def plan(home, source, runtimes=None):
     src = oas if source == ROOT else load_oas(source)
     guidance = '\n\n'.join((source / f).read_text(encoding='utf-8') for f in src.SHARED_PROMPTS)
     guidance += '\n\n# Workflow selection\n\n'
-    guidance += f'The system source is `{source}`. Read only the relevant workflow from its `workflows/` directory: development, research, ops, tutor, or unattended. For mixed requests, use the matching sections. Existing explicit personal instructions outside this managed block and applicable project instructions take precedence over these defaults, especially worktree choices and plan-before-code preferences. Do not auto-run an unattended job.\n'
+    guidance += f'Workflows live in `{source}/workflows/`: development, research, ops, tutor, and unattended. Read only the one that fits the task, or the matching sections of each for a mixed request. Personal instructions outside this managed block and project instructions override these defaults. Do not auto-run an unattended job.\n'
     changes = []
     def add(relative, content, executable=False):
         target = home / relative
