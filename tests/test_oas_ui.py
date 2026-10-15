@@ -237,6 +237,10 @@ class CursorSkippingTest(OASUITestBase):
 # ---------------------------------------------------------------------------
 
 class WorkspaceScreenTest(OASUITestBase):
+    def test_default_scan_root_is_code(self):
+        launcher = oas_ui.Launcher(home=self.home, cwd=self.cwd, which=always_which())
+        self.assertEqual(launcher.scan_root, self.home / 'code')
+
     def enter_workspace_screen(self, which=None):
         # Navigate via key() rather than poking screen='workspace' directly, so the
         # implementation's own entry hook (which caches the workspace scan) actually runs.
@@ -634,6 +638,13 @@ class RunUITest(unittest.TestCase):
         with patch.object(sys, 'stdin', FakeStream(True)), patch.object(sys, 'stdout', FakeStream(False)):
             with self.assertRaises(ValueError):
                 oas_screen.run_ui()
+
+    def test_unknown_terminal_is_an_error_not_a_traceback(self):
+        failing = patch.object(oas_screen.curses, 'wrapper', side_effect=curses.error('setupterm: could not find terminal'))
+        with patch.object(sys, 'stdin', FakeStream(True)), patch.object(sys, 'stdout', FakeStream(True)), failing:
+            with self.assertRaises(ValueError) as cm:
+                oas_screen.run_ui(launcher=object())
+        self.assertIn('TERM=xterm-256color', str(cm.exception))
 
     # Deviation (see final report): the spec's NO_COLOR/--plain "no rain" behavior lives
     # past this TTY guard, inside the curses.wrapper session loop. The contract does not

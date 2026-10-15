@@ -127,7 +127,7 @@ def permission_label(cmd, agent, mode):
 class Launcher:
     def __init__(self, *, home=None, scan_root=None, cwd=None, which=None, environ=None, list_models=None):
         self.home = Path.home() if home is None else Path(home)
-        self.scan_root = (self.home / 'Developer/active') if scan_root is None else Path(scan_root)
+        self.scan_root = (self.home / 'code') if scan_root is None else Path(scan_root)
         self.cwd = Path(os.getcwd()) if cwd is None else Path(cwd)
         self.which = which
         self.environ = os.environ if environ is None else environ

@@ -417,7 +417,13 @@ def run_ui(plain=False, launcher=None, call=None):
     no_rain = bool(plain or os.environ.get('NO_COLOR'))
     try:
         while True:
-            curses.wrapper(_session, launcher, no_rain, _oas_ui.MIN_COLS, _oas_ui.MIN_ROWS)
+            try:
+                curses.wrapper(_session, launcher, no_rain, _oas_ui.MIN_COLS, _oas_ui.MIN_ROWS)
+            except curses.error as exc:
+                if 'setupterm' not in str(exc):
+                    raise
+                raise ValueError(f'this terminal has no terminfo entry for TERM={os.environ.get("TERM", "")!r}; '
+                                 'set TERM=xterm-256color or use oas run ...') from None
             if launcher.quit or launcher.launch_request is None:
                 return 0
             cmd, workspace = launcher.launch_request
