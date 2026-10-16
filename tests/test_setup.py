@@ -187,6 +187,44 @@ class SetupTest(unittest.TestCase):
         codex = [a.decode() for r, a in after.items() if r.startswith('.codex/')]
         self.assertFalse(any('auto_compact' in text for text in codex))
 
+    def codex_setup(self, config, models):
+        d = self.home / '.codex'
+        d.mkdir(exist_ok=True)
+        (d / 'config.toml').write_text(config)
+        (d / 'models_cache.json').write_text(json.dumps({'models': models}))
+        return d / 'config.toml'
+
+    def test_codex_compaction_limit_is_35_percent_of_the_configured_window(self):
+        config = 'model = "big"\nmodel_reasoning_effort = "high"\nnotify = [\n  "a",\n]\n\n[agents]\nenabled = true\n'
+        p = self.codex_setup(config, [{'slug': 'small', 'context_window': 100000}, {'slug': 'big', 'context_window': 500000}])
+        changes = m.plan(self.home, self.source)
+        after = next(a for t, _, a, _ in changes if t == p).decode()
+        data = m.tomllib.loads(after)
+        self.assertEqual(data['model_auto_compact_token_limit'], 175000)
+        self.assertEqual(data['agents'], {'enabled': True})
+        self.assertTrue(after.endswith(config))
+        m.apply(changes, self.home)
+        self.assertEqual(m.plan(self.home, self.source), [])
+        # A model change moves the managed limit to the new window.
+        p.write_text(p.read_text().replace('"big"', '"small"'))
+        after = next(a for t, _, a, _ in m.plan(self.home, self.source) if t == p).decode()
+        self.assertEqual(m.tomllib.loads(after)['model_auto_compact_token_limit'], 35000)
+        self.assertEqual(after.count(m.CODEX_COMPACT_START), 1)
+
+    def test_codex_compaction_leaves_user_limit_and_unknown_models_alone(self):
+        for config, models in (('model = "big"\nmodel_auto_compact_token_limit = 9\n', [{'slug': 'big', 'context_window': 500000}]),
+                               ('model = "other"\n', [{'slug': 'big', 'context_window': 500000}]),
+                               ('[agents]\n', [{'slug': 'big', 'context_window': 500000}])):
+            with self.subTest(config=config):
+                p = self.codex_setup(config, models)
+                self.assertNotIn(p, [t for t, _, _, _ in m.plan(self.home, self.source)])
+
+    def test_codex_compaction_refuses_malformed_block(self):
+        p = self.codex_setup(m.CODEX_COMPACT_START + '\nmodel = "big"\n', [])
+        with self.assertRaises(ValueError):
+            m.plan(self.home, self.source)
+        self.assertTrue(p.read_text().startswith(m.CODEX_COMPACT_START))
+
     def test_markers_and_paths_come_from_oas(self):
         self.assertEqual((m.START,m.END),(m.oas.MANAGED_START,m.oas.MANAGED_END))
         targets={str(t.relative_to(self.home)) for t,_,_,_ in m.plan(self.home,self.source)}

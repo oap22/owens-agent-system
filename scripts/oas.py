@@ -482,13 +482,35 @@ def new_task(mode, output, title, criteria, scenario_id=None):
     return folder
 
 
-COMPACT_REMINDER = ('Context was just compacted. The summary is lossy and is not evidence. Reload the task '
-                    'checkpoint and relevant instructions, reverify volatile files, git state, tests, accounts, '
-                    'and remote state, then continue from the next incomplete criterion.')
+# Written as facts, not commands: hook output is model context, and imperative
+# text there can look like prompt injection. Claude Code caps it at 10,000 characters.
+COMPACT_REMINDER = ('Context was just compacted. The summary is lossy and is not evidence of file, test, '
+                    'account, or remote state. The task checkpoint, repository instructions, and live state '
+                    'below are the sources of truth for the next incomplete criterion.')
+COMPACT_CONTEXT_LIMIT = 8000
+
+
+def git_state(workspace):
+    """Branch, recent commits, and uncommitted paths, or [] outside a git work tree."""
+    def git(*args):
+        result = subprocess.run(['git', '-C', str(workspace), *args], capture_output=True, text=True, timeout=5)
+        return result.stdout.strip() if result.returncode == 0 else None
+    try:
+        branch = git('rev-parse', '--abbrev-ref', 'HEAD')
+        if branch is None:
+            return []
+        status = git('status', '--short') or ''
+        changed = status.splitlines()
+        lines = [f'Git branch: {branch}', 'Recent commits:\n' + (git('log', '--oneline', '-5') or '(none)')]
+        lines.append('Uncommitted changes:\n' + ('\n'.join(changed[:20]) + (f'\n... {len(changed) - 20} more' if len(changed) > 20 else '')
+                                                 if changed else '(none)'))
+        return lines
+    except (OSError, subprocess.SubprocessError):
+        return []
 
 
 def compact_context(workspace):
-    """Post-compaction text for native hooks: the reminder plus open task checkpoints in WORKSPACE/.oas."""
+    """Post-compaction text for native hooks: the reminder, open task checkpoints in WORKSPACE/.oas, and git state."""
     lines = [COMPACT_REMINDER]
     root = Path(workspace).expanduser() / '.oas'
     for path in sorted(root.glob('*/task.json')) if root.is_dir() else []:
@@ -501,7 +523,8 @@ def compact_context(workspace):
                          f'next action: {checkpoint.get("next_action")})')
         except (OSError, ValueError, AttributeError):
             lines.append(f'Unreadable task checkpoint: {path}')
-    return '\n'.join(lines)
+    lines += git_state(Path(workspace).expanduser())
+    return '\n'.join(lines)[:COMPACT_CONTEXT_LIMIT]
 
 
 def hook_workspace(stdin):

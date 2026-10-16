@@ -10,6 +10,7 @@ from pathlib import Path
 import shlex
 import stat
 import sys
+import tomllib
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -72,6 +73,54 @@ def with_hook(config, command):
     return {**config, 'hooks': hooks}
 
 
+CODEX_COMPACT_START = '# owens-agent-system:compaction start'
+CODEX_COMPACT_END = '# owens-agent-system:compaction end'
+
+
+def codex_context_window(home, model):
+    """The model's context_window from Codex's own model cache, or None when it is not recorded."""
+    try:
+        cache = json.loads((home / '.codex/models_cache.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    stack = [cache]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            if model in (item.get('slug'), item.get('id'), item.get('model'), item.get('name')) and type(item.get('context_window')) is int:
+                return item['context_window']
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return None
+
+
+def codex_compaction(old, home):
+    """Keep a managed model_auto_compact_token_limit at COMPACT_PERCENT of the configured model's window.
+
+    Codex takes only an absolute token count, so the value is right for the model in
+    ~/.codex/config.toml at install time; rerun setup after changing that model.
+    """
+    a, b = old.find(CODEX_COMPACT_START), old.find(CODEX_COMPACT_END)
+    if (a < 0) != (b < 0) or a > b:
+        raise ValueError('Malformed OAS compaction block in .codex/config.toml')
+    rest = old if a < 0 else old[:a] + old[b + len(CODEX_COMPACT_END):].lstrip('\n')
+    try:
+        config = tomllib.loads(rest)
+    except tomllib.TOMLDecodeError as error:
+        raise ValueError(f'Cannot parse .codex/config.toml: {error}') from None
+    model = config.get('model')
+    window = codex_context_window(home, model) if isinstance(model, str) else None
+    if 'model_auto_compact_token_limit' in config or window is None:
+        # The user's own limit wins; without a known window there is no honest 35 percent.
+        return rest
+    block = f'{CODEX_COMPACT_START}\nmodel_auto_compact_token_limit = {window * COMPACT_PERCENT // 100}\n{CODEX_COMPACT_END}\n'
+    # Top-level keys must precede the first table, so the block goes first.
+    result = block + rest
+    tomllib.loads(result)
+    return result
+
+
 def refuse_symlink(home, target, relative):
     if target.is_symlink() or any(p.is_symlink() for p in target.parents if p != home and p.is_relative_to(home)):
         raise ValueError(f'Refusing symlink target: {relative}')
@@ -108,6 +157,8 @@ def plan(home, source, runtimes=None):
                 raise ValueError('Refusing to replace an unmanaged Codex profile')
             return body
         add(f'.codex/owen-{mode}.config.toml', profile)
+    if (home / '.codex/config.toml').is_file():
+        add('.codex/config.toml', lambda old: codex_compaction(old, home))
     patches = {
         '.claude/settings.json': {'permissions': {'disableBypassPermissionsMode':'disable'},
                                   'env': {'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE': str(COMPACT_PERCENT)}},

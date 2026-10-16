@@ -145,6 +145,21 @@ class OASTest(unittest.TestCase):
         self.assertIn('Unreadable task checkpoint', text)
         self.assertEqual(oas.compact_context(self.root / 'none'), oas.COMPACT_REMINDER)
 
+    def test_compact_context_reports_git_state_and_stays_bounded(self):
+        repo = self.root / 'repo'
+        repo.mkdir()
+        git = lambda *a: subprocess.run(['git', '-C', str(repo), *a], check=True, capture_output=True)
+        git('init', '-q', '-b', 'work')
+        git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'first commit')
+        for i in range(30):
+            (repo / f'f{i}.txt').write_text('x')
+        text = oas.compact_context(repo)
+        self.assertIn('Git branch: work', text)
+        self.assertIn('first commit', text)
+        self.assertIn('... 10 more', text)
+        self.assertLessEqual(len(oas.compact_context(repo)), oas.COMPACT_CONTEXT_LIMIT)
+        self.assertNotIn('Git branch', oas.compact_context(self.root / 'none'))
+
     def test_hook_workspace_reads_cwd_and_falls_back(self):
         self.assertEqual(oas.hook_workspace(io.StringIO(json.dumps({'cwd': '/x'}))), '/x')
         for bad in ('', 'not json', '[1]', '{"cwd": 3}'):
