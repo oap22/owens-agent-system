@@ -9,4 +9,4 @@
 7. Commit reviewed files. Push and merge within the user's authorization after required CI and review gates. Distinguish local checks, hosted CI, merge, installation, and deployment.
 8. Checkpoint after planning, completed implementation slices, and before release or compaction. Record commit, worktree, ownership, completed criteria, evidence paths, failing checks, risks, and next action. After compaction or resume, reload the checkpoint and verify the current git state and affected checks before acting.
 
-Skill routing: `engineering-principles`, `plan-then-ship`, `adversarial-review`, `publish-to-github`, `project-sync`; `turing` for that repository. Read selected skill instructions at use time.
+Skill routing: `engineering-principles`, `implement`, `plan-then-ship`, `adversarial-review`, `publish-to-github`, `project-sync`; `turing` for that repository. Read selected skill instructions at use time.
