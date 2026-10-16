@@ -500,6 +500,9 @@ class OASTest(unittest.TestCase):
         skills = self.root / 'skills'
         for name in oas.routed_skills():
             (skills / name).mkdir(parents=True)
+        (skills / 'session-handoff').mkdir(exist_ok=True)
+        copy = skills / 'session-handoff/handoff-template.md'
+        copy.write_bytes((oas.ROOT / 'templates/handoff.md').read_bytes())
         err = io.StringIO()
         with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
             oas.check(skills_root=skills)
@@ -515,6 +518,21 @@ class OASTest(unittest.TestCase):
         with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(oas.main(['check', '--skills-root', str(self.root / 'absent')]), 0)
         self.assertIn('skills repo not present; routing check skipped', err.getvalue())
+
+    def test_handoff_template_copy_drift(self):
+        skills = self.root / 'skills'
+        for name in oas.routed_skills():
+            (skills / name).mkdir(parents=True)
+        (skills / 'session-handoff').mkdir(exist_ok=True)
+        copy = skills / 'session-handoff/handoff-template.md'
+        for content in (None, b'# Handoff\n\nRequested outcome:\n'):
+            if content is not None:
+                copy.write_bytes(content)
+            err, out = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+                self.assertEqual(oas.main(['check', '--skills-root', str(skills)]), 0)
+            self.assertIn('does not match templates/handoff.md', err.getvalue())
+            self.assertIn('PASS:', out.getvalue())
 
     def test_skill_routing_default_root_prefers_current_layout(self):
         home = self.root / 'home'

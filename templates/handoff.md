@@ -6,6 +6,8 @@ Workspace, branch, commit, and owned files:
 
 Completed acceptance criteria and evidence paths:
 
+Decisions and reasons:
+
 Checks run, exact results, and checks not run:
 
 Remaining blockers and unresolved claims:

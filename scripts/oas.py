@@ -1043,6 +1043,10 @@ def check(skills_root=None):
         for name in sorted(routed_skills()):
             if not (skills_root / name).is_dir():
                 print(f'WARNING: routed skill `{name}` has no directory under {skills_root}', file=sys.stderr)
+        # session-handoff carries a copy of the handoff template; warn when the two drift apart.
+        copy = skills_root / 'session-handoff/handoff-template.md'
+        if not copy.is_file() or copy.read_bytes() != (ROOT / 'templates/handoff.md').read_bytes():
+            print(f'WARNING: {copy} does not match templates/handoff.md; copy the template to it', file=sys.stderr)
     else:
         print('skills repo not present; routing check skipped', file=sys.stderr)
     largest = max(sizes.values())
