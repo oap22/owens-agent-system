@@ -2,7 +2,7 @@
 
 Compaction is lossy working-memory compression. The runtime summarizes older conversation so a long task can continue inside a finite model context window. The summary is useful continuity, but exact evidence, authorization, current external state, and test results belong in durable artifacts.
 
-OAS leaves token accounting and the trigger to each native runtime. Model context windows, output reserves, tool schemas, and available controls differ, so one OAS percentage would not mean the same thing across agents. The shared workflow supplies the portable part: checkpoint at completed phase boundaries, preserve explicit state, and verify volatile facts after compaction or resume.
+OAS leaves token accounting to each native runtime. Where a runtime takes a percentage of its own auto-compact window, setup sets Owen's trigger of 35 percent: `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` in `~/.claude/settings.json` and `model.compressionThreshold` in `~/.gemini/settings.json`. A percentage of each runtime's own window keeps the same meaning across models. Codex takes only an absolute token count, which would be a different share of every model window, so Codex keeps its model-aware default. The Claude variable can only lower the trigger; Gemini needs a restart to apply it. The shared workflow supplies the portable part: checkpoint at completed phase boundaries, preserve explicit state, and verify volatile facts after compaction or resume.
 
 ## Native behavior
 
@@ -11,7 +11,7 @@ Reviewed 2026-09-07 against official documentation and the locally installed CLI
 | Agent | Automatic behavior | Manual command | OAS behavior |
 |---|---|---|---|
 | Codex | Uses the selected model's native auto-compaction limit; an absolute `model_auto_compact_token_limit` override exists | `/compact` | Inherits the model-aware native limit; no fixed override; global post-compaction hook |
-| Claude Code | Automatically compacts near its effective window | `/compact [focus]` | Passes `--autocompact auto` explicitly; global post-compaction hook |
+| Claude Code | Automatically compacts near its effective window | `/compact [focus]` | Passes `--autocompact auto` explicitly; setup sets a 35 percent trigger and a global post-compaction hook |
 | Cursor Agent | Automatically summarizes older messages near capacity | `/summarize` (`/compress`) | Inherits native behavior; `preCompact` is observational and cannot change the trigger |
 | GitHub Copilot CLI | Begins background compaction at about 80 percent and waits at about 95 percent if needed | `/compact [focus]` | Inherits native behavior and its saved compaction checkpoints |
 | OpenCode | `compaction.auto` defaults to true and reserves room for compaction | `/compact` (`/summarize`) | Setup explicitly enables the global setting while preserving siblings; no project config is overwritten |
@@ -65,6 +65,7 @@ For bounded specialist work, needing repeated compaction is a signal that the ta
 - [Claude Code context window](https://code.claude.com/docs/en/context-window) documents automatic and focused manual compaction, reinjected instructions, recent-file reload, and limits on what survives.
 - [Cursor summarization](https://docs.cursor.com/en/agent/chat/summarization), [CLI slash commands](https://prod.cursor.com/docs/cli/reference/slash-commands), and [hooks](https://prod.cursor.com/docs/hooks) document automatic summarization, `/summarize`, and the observational `preCompact` event.
 - [GitHub Copilot CLI context management](https://docs.github.com/en/copilot/concepts/agents/copilot-cli/context-management) documents the approximately 80/95 percent background behavior, structured summaries, and checkpoints.
+- [Claude Code environment variables](https://code.claude.com/docs/en/env-vars) documents `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` (1 to 100, lowers only); [Gemini CLI configuration](https://geminicli.com/docs/reference/configuration/) documents `model.compressionThreshold` (fraction, default 0.5, restart required).
 - [Claude Code hooks](https://code.claude.com/docs/en/hooks) and [Codex hooks](https://learn.chatgpt.com/docs/hooks) document the `compact` session-start source and plain-stdout context injection; Codex documents hook trust. [Gemini CLI hooks](https://geminicli.com/docs/hooks/reference/), [Copilot hooks](https://docs.github.com/en/copilot/reference/hooks-reference), [OpenCode plugins](https://opencode.ai/docs/plugins/), and [pi extensions](https://pi.dev/docs/latest/extensions) document their compaction events.
 - [OpenCode configuration](https://dev.opencode.ai/docs/config) documents automatic compaction, pruning, and reserved token space. Local help and resolved configuration still need validation after client upgrades.
 

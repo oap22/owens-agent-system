@@ -45,6 +45,10 @@ def merged(base, overlay):
     return out
 
 
+# Owen's compaction trigger, as a share of each runtime's own auto-compact window.
+# Only Claude Code and Gemini CLI take a percentage; Codex takes an absolute token
+# count, which would mean a different share for every model window.
+COMPACT_PERCENT = 35
 COMPACTION_HOOK_FILES = ('.claude/settings.json', '.codex/hooks.json')
 
 
@@ -105,7 +109,9 @@ def plan(home, source, runtimes=None):
             return body
         add(f'.codex/owen-{mode}.config.toml', profile)
     patches = {
-        '.claude/settings.json': {'permissions': {'disableBypassPermissionsMode':'disable'}},
+        '.claude/settings.json': {'permissions': {'disableBypassPermissionsMode':'disable'},
+                                  'env': {'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE': str(COMPACT_PERCENT)}},
+        '.gemini/settings.json': {'model': {'compressionThreshold': COMPACT_PERCENT / 100}},
         '.cursor/cli-config.json': {'sandbox': {'mode':'enabled'},'approvalMode':'allowlist'},
         '.config/opencode/opencode.json': {
             'permission':{'*':'ask','read':'allow','glob':'allow','grep':'allow','list':'allow','edit':'allow','external_directory':'ask','doom_loop':'ask'},

@@ -175,6 +175,18 @@ class SetupTest(unittest.TestCase):
         # Local sessions already get the global hook from setup; do not print the reminder twice.
         self.assertEqual(run({}), '')
 
+    def test_compaction_percent_reaches_claude_and_gemini_only(self):
+        g = self.home / '.gemini/settings.json'
+        g.parent.mkdir()
+        g.write_text(json.dumps({'model': {'name': 'mine'}, 'ui': {'theme': 'x'}}))
+        after = {str(t.relative_to(self.home)): a for t, _, a, _ in m.plan(self.home, self.source)}
+        claude = json.loads(after['.claude/settings.json'])
+        self.assertEqual(claude['env']['CLAUDE_AUTOCOMPACT_PCT_OVERRIDE'], '35')
+        gemini = json.loads(after['.gemini/settings.json'])
+        self.assertEqual(gemini, {'model': {'name': 'mine', 'compressionThreshold': 0.35}, 'ui': {'theme': 'x'}})
+        codex = [a.decode() for r, a in after.items() if r.startswith('.codex/')]
+        self.assertFalse(any('auto_compact' in text for text in codex))
+
     def test_markers_and_paths_come_from_oas(self):
         self.assertEqual((m.START,m.END),(m.oas.MANAGED_START,m.oas.MANAGED_END))
         targets={str(t.relative_to(self.home)) for t,_,_,_ in m.plan(self.home,self.source)}
@@ -224,7 +236,7 @@ class SetupTest(unittest.TestCase):
         actions=m.rollback_plan(self.home,backup)
         # one global instruction file per agent, one Codex profile per mode,
         # the three settings patches, and the oas launcher
-        self.assertEqual(len(actions),len(m.oas.GLOBAL_INSTRUCTIONS)+len(m.oas.MODES)+4+1)
+        self.assertEqual(len(actions),len(m.oas.GLOBAL_INSTRUCTIONS)+len(m.oas.MODES)+5+1)
         self.assertEqual(self.snapshot(),before)
         out=subprocess.run([sys.executable,str(self.source/'scripts/setup.py'),'--home',str(self.home),'--rollback',str(backup)],capture_output=True,text=True,check=True).stdout
         self.assertIn('restore: .claude/CLAUDE.md',out);self.assertIn('remove: .codex/AGENTS.md',out);self.assertIn('preview only',out)
