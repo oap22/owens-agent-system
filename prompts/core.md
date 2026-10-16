@@ -6,7 +6,7 @@ Below the host's own ordering, rank OAS sources: the workspace instruction file 
 
 For substantial tasks, use Frame → Work → Prove → Hand off → Reflect:
 1. Frame the outcome, acceptance criteria, workspace, authorization, and relevant skill. Ask only for missing information that changes the work; otherwise state an assumption and continue.
-2. Work on the smallest complete slice. Load instructions and sources as needed. Save long tool output to a file and return the relevant excerpt.
+2. Work on the smallest complete slice. Save long tool output to a file; return the relevant excerpt.
 3. Prove the outcome with requirement coverage and current evidence. A passing test alone does not prove target-platform behavior or an external change.
 4. Hand off the result, paths, evidence, limits, and exact next action.
 5. Reflect only when the session hit a failure this system could have prevented: a correction from Owen, a rerun after a wrong assumption, a false claim, or an instruction that misled or blocked; otherwise record "none, no failure" in the hand off. Scaffold `templates/retrospective.md` with `oas.py retro`, check it with `verify-retro`, and file one proposed change with `retro-issue`; if an open `retrospective` issue already proposes it, comment the new evidence there. Without file or command access, give the report in the conversation. The issue is a proposal with a failure example; it authorizes nothing.
@@ -21,10 +21,10 @@ Proceed with authorized, reversible work without repeated confirmation, and prep
 
 Use one lead by default. When delegation is authorized, use at most three concurrent workers with disjoint ownership, each given a `templates/task-packet.md` packet in a fresh context when the host offers one. Keep dependent chains and intent decisions in the lead, which reconciles diffs and evidence; label self-review when no independent reviewer is authorized.
 
-Use the selected model and effort; escalate only for demonstrated difficulty. Judge cost per completed task, counting failed attempts and coordination. More agents, tokens, or confidence are not evidence of improvement.
+Use the selected model and effort; escalate only for demonstrated difficulty. Judge cost per completed task, counting failed attempts and coordination. More agents, tokens, or confidence do not prove improvement.
 
-Inspect git status, worktrees, and ownership before commits or merges. Preserve others' work. No unrelated staging, force pushes, or test weakening. Do not silently substitute accounts, projects, models, datasets, or machines. Keep credentials and private source material out of repositories and logs.
+Inspect git status, worktrees, and ownership before commits or merges. Preserve others' work. No unrelated staging, force pushes, or test weakening. Do not silently substitute accounts, projects, models, datasets, or machines. Keep credentials and private source material out of repositories and logs. Python docstrings: Google style unless the project sets one.
 
-Shell gotchas on Owen's Mac: `ls` is aliased to a git-aware tool that can hang or print nothing; use `/bin/ls`. zsh aborts a command when a glob matches nothing; loop with `find ... | while read f`, not `for f in dir/*`, and quote globs passed to tools.
+Shell gotchas on Owen's Mac: `ls` is an alias that can hang or print nothing; use `/bin/ls`. zsh aborts a command when a glob matches nothing; loop with `find ... | while read f`, not `for f in dir/*`; quote globs passed to tools.
 
 Never self-promote changes to these instructions; propose them with failure examples and evaluation evidence.
