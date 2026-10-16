@@ -488,6 +488,8 @@ COMPACT_REMINDER = ('Context was just compacted. The summary is lossy and is not
                     'account, or remote state. The task checkpoint, repository instructions, and live state '
                     'below are the sources of truth for the next incomplete criterion.')
 COMPACT_CONTEXT_LIMIT = 8000
+# Canonical skill for rebuilding working state after compaction; `check` verifies it exists.
+COMPACT_SKILL = 'session-handoff'
 
 
 def git_state(workspace):
@@ -511,7 +513,7 @@ def git_state(workspace):
 
 def compact_context(workspace):
     """Post-compaction text for native hooks: the reminder, open task checkpoints in WORKSPACE/.oas, and git state."""
-    lines = [COMPACT_REMINDER]
+    lines = [COMPACT_REMINDER, f'Skill for resuming after compaction: `{COMPACT_SKILL}`.']
     root = Path(workspace).expanduser() / '.oas'
     for path in sorted(root.glob('*/task.json')) if root.is_dir() else []:
         try:
@@ -988,8 +990,8 @@ def bundle(mode, agent, output, task, shared=True):
 
 
 def routed_skills():
-    """Skill names referenced by `Skill routing:` lines in the workflows."""
-    names = set()
+    """Skill names referenced by `Skill routing:` lines in the workflows and by the compaction hook."""
+    names = {COMPACT_SKILL}
     for path in sorted((ROOT / 'workflows').glob('*.md')):
         for line in read(path).splitlines():
             if line.startswith('Skill routing:'):

@@ -139,11 +139,14 @@ class OASTest(unittest.TestCase):
         (self.root / '.oas/d/task.json').write_text('{not json')
         text = oas.compact_context(self.root)
         self.assertTrue(text.startswith(oas.COMPACT_REMINDER))
+        self.assertIn(f'`{oas.COMPACT_SKILL}`', text)
+        self.assertIn(oas.COMPACT_SKILL, oas.routed_skills())
         self.assertIn('next a', text)
         self.assertIn('next c', text)
         self.assertNotIn('next b', text)
         self.assertIn('Unreadable task checkpoint', text)
-        self.assertEqual(oas.compact_context(self.root / 'none'), oas.COMPACT_REMINDER)
+        self.assertEqual(oas.compact_context(self.root / 'none').splitlines()[0], oas.COMPACT_REMINDER)
+        self.assertNotIn('checkpoint:', oas.compact_context(self.root / 'none'))
 
     def test_compact_context_reports_git_state_and_stays_bounded(self):
         repo = self.root / 'repo'
