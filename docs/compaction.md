@@ -20,9 +20,13 @@ Reviewed 2026-09-07 against official documentation and the locally installed CLI
 
 The launcher reaches only sessions that `oas run` starts. Setup therefore also installs a native `SessionStart` hook with matcher `compact` in `~/.claude/settings.json` and `~/.codex/hooks.json`. Both runtimes add the hook's plain stdout to the model's context after automatic or manual compaction, so plain `claude`, the Claude desktop app's Code tab, and plain `codex` get the same continuity step. The hook runs `oas.py compact-context`, which prints the reload-and-reverify reminder and lists each open `.oas/*/task.json` checkpoint in the session's working directory (taken from the hook's stdin `cwd`). Setup keeps other hooks and replaces an older OAS hook in place. Codex asks the user to review and trust a new hook once through `/hooks`.
 
+Claude Code on the web runs in a fresh cloud container where setup never ran. This repository's `.claude/settings.json` carries the same hook for cloud sessions that open this repository. It runs only when `CLAUDE_CODE_REMOTE` is `true`, so local sessions do not get the reminder twice. Other repositories need the same file to get it in the cloud. Claude chat and Cowork on claude.ai do not run Claude Code hooks, so they cannot get this hook.
+
 | Agent | Post-compaction injection | OAS status |
 |---|---|---|
-| Claude Code | `SessionStart` matcher `compact` | Installed |
+| Claude Code (CLI and desktop Code tab) | `SessionStart` matcher `compact` | Installed globally by setup |
+| Claude Code on the web | Same hook in a repository's `.claude/settings.json` | In this repository only |
+| Claude chat and Cowork | No Claude Code hooks | Not possible |
 | Codex | `SessionStart` matcher `compact`; must be trusted once | Installed |
 | OpenCode | `experimental.session.compacting` plugin hook adds text to the compaction prompt | Not installed: experimental API, not validated here |
 | pi | `session_before_compact` extension event can replace the summary | Not installed: OAS has no pi adapter yet |

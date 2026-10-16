@@ -163,6 +163,18 @@ class SetupTest(unittest.TestCase):
         self.assertIn(str(task), out)
         self.assertIn('Run tests', out)
 
+    def test_repo_compaction_hook_runs_only_in_cloud_sessions(self):
+        config = json.loads((self.source / '.claude/settings.json').read_text())
+        group = config['hooks']['SessionStart'][0]
+        self.assertEqual(group['matcher'], 'compact')
+        command = group['hooks'][0]['command']
+        env = {'PATH': m.os.environ['PATH'], 'CLAUDE_PROJECT_DIR': str(self.source)}
+        run = lambda extra: subprocess.run(['sh', '-c', command], input='{}', capture_output=True, text=True, check=True,
+                                           env={**env, **extra}, cwd=self.home).stdout
+        self.assertIn('Context was just compacted', run({'CLAUDE_CODE_REMOTE': 'true'}))
+        # Local sessions already get the global hook from setup; do not print the reminder twice.
+        self.assertEqual(run({}), '')
+
     def test_markers_and_paths_come_from_oas(self):
         self.assertEqual((m.START,m.END),(m.oas.MANAGED_START,m.oas.MANAGED_END))
         targets={str(t.relative_to(self.home)) for t,_,_,_ in m.plan(self.home,self.source)}

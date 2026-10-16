@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ \"$CLAUDE_CODE_REMOTE\" = true ]; then python3 \"$CLAUDE_PROJECT_DIR/scripts/oas.py\" compact-context; fi"
+          }
+        ]
+      }
+    ]
+  }
+}
