@@ -143,6 +143,11 @@ class OASTest(unittest.TestCase):
         self.assertIn(oas.COMPACT_SKILL, oas.routed_skills())
         self.assertIn('next a', text)
         self.assertIn('next c', text)
+        (self.root / '.oas/a/handoff.md').write_text('# Handoff\n')
+        (self.root / '.oas/handoff.md').write_text('# Handoff\n')
+        text = oas.compact_context(self.root)
+        self.assertIn(f'Handoff: {self.root / ".oas/a/handoff.md"}', text)
+        self.assertIn(f'Handoff: {self.root / ".oas/handoff.md"}', text)
         self.assertNotIn('next b', text)
         self.assertIn('Unreadable task checkpoint', text)
         self.assertEqual(oas.compact_context(self.root / 'none').splitlines()[0], oas.COMPACT_REMINDER)
@@ -162,6 +167,10 @@ class OASTest(unittest.TestCase):
         self.assertIn('... 10 more', text)
         self.assertLessEqual(len(oas.compact_context(repo)), oas.COMPACT_CONTEXT_LIMIT)
         self.assertNotIn('Git branch', oas.compact_context(self.root / 'none'))
+
+    def test_new_task_handoff_matches_the_template(self):
+        folder = oas.new_task('development', self.root, 'Fix it', ['Regression passes'])
+        self.assertEqual((folder / 'handoff.md').read_bytes(), (oas.ROOT / 'templates/handoff.md').read_bytes())
 
     def test_hook_workspace_reads_cwd_and_falls_back(self):
         self.assertEqual(oas.hook_workspace(io.StringIO(json.dumps({'cwd': '/x'}))), '/x')

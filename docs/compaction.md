@@ -38,7 +38,7 @@ Claude Code on the web runs in a fresh cloud container where setup never ran. Th
 
 Hook behavior was checked against official documentation on 2026-10-15. Unit tests prove the installed command and its output; they do not prove that a given client version fires the hook.
 
-The hook prints facts, not commands, because hook output is model context and imperative text there can look like prompt injection. Its output is the lossy-summary notice, the name of the canonical `session-handoff` skill as the resume procedure, open checkpoints, the git branch, the last five commits, and up to 20 uncommitted paths, capped at 8,000 characters (Claude Code caps hook context at 10,000). A hook cannot run a skill itself; it names the skill, and the agent loads it. `oas.py check` warns when that skill is missing from the skills repository.
+The hook prints facts, not commands, because hook output is model context and imperative text there can look like prompt injection. Its output is the lossy-summary notice, the name of the canonical `session-handoff` skill as the resume procedure, open checkpoints and their `handoff.md` files, the git branch, the last five commits, and up to 20 uncommitted paths, capped at 8,000 characters (Claude Code caps hook context at 10,000). A hook cannot run a skill itself; it names the skill, and the agent loads it. `oas.py check` warns when that skill is missing from the skills repository.
 
 ## Manual compaction
 

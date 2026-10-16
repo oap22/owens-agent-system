@@ -478,7 +478,8 @@ def new_task(mode, output, title, criteria, scenario_id=None):
     if scenario_id is not None:
         record['scenario'] = scenario_id
     new_file(folder / 'task.json', json.dumps(record, indent=2) + '\n')
-    new_file(folder / 'handoff.md', '# Handoff\n\nOutcome:\n\nEvidence:\n\nRemaining work:\n\nNext action:\n')
+    # One handoff format: the session-handoff skill copies this template byte for byte.
+    new_file(folder / 'handoff.md', read(ROOT / 'templates/handoff.md'))
     return folder
 
 
@@ -523,8 +524,12 @@ def compact_context(workspace):
                 continue
             lines.append(f'Open task checkpoint: {path} (status {data.get("status")}, phase {checkpoint.get("phase")}, '
                          f'next action: {checkpoint.get("next_action")})')
+            if (path.parent / 'handoff.md').is_file():
+                lines.append(f'Handoff: {path.parent / "handoff.md"}')
         except (OSError, ValueError, AttributeError):
             lines.append(f'Unreadable task checkpoint: {path}')
+    if (root / 'handoff.md').is_file():
+        lines.append(f'Handoff: {root / "handoff.md"}')
     lines += git_state(Path(workspace).expanduser())
     return '\n'.join(lines)[:COMPACT_CONTEXT_LIMIT]
 
