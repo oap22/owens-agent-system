@@ -1,6 +1,6 @@
 # Development
 
-1. Inspect repository instructions, git state, worktrees, and active ownership. Use an isolated task worktree and preserve unrelated changes.
+1. Inspect repository instructions, git state, worktrees, and active ownership. Work on the current branch; use a task worktree only when Owen asks or the repository's instructions require one. Preserve unrelated changes.
 2. Define observable before/after behavior. For substantial changes, record acceptance criteria, design decisions, risks, and validation before implementation, scaled to the change.
 3. When delegation is authorized, give `implementor` an independent slice only if its check is executable and its reading would crowd the lead's context. Use `templates/task-packet.md`; keep coupled edits and intent questions in the lead. Workers must know they share the codebase.
 4. A worker that exhausts its budget returns partial work and evidence. Diagnose before retrying: missing access, bad inputs, and a broken check need correction, not more effort. For a reasoning failure, use `implementor-retry` once if configured; otherwise take the slice in the lead. Log every attempt with `oas.py log-run` when evaluating the split.
