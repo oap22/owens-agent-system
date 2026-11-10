@@ -307,6 +307,25 @@ class WorkspaceScreenTest(OASUITestBase):
         missing_root = self.home / 'nope'
         self.assertEqual(oas_ui.scan_workspaces(missing_root, self.cwd), [])
 
+    def test_scan_workspaces_finds_repos_in_group_folders(self):
+        # Home layout: ~/code/<group>/<repo>; a group folder is not a repo.
+        me = self.scan_root / 'me'
+        me.mkdir()
+        res = self.scan_root / 'res'
+        res.mkdir()
+        alpha = self.repo('alpha', root=me)
+        gamma = self.repo('gamma', root=res)
+        top = self.repo('top')
+        (me / 'notes').mkdir()  # plain folder, not a repo
+        self.assertEqual(oas_ui.scan_workspaces(self.scan_root, self.cwd), [alpha, gamma, top])
+
+    def test_scan_workspaces_skips_cwd_in_group_folder(self):
+        me = self.scan_root / 'me'
+        me.mkdir()
+        here = self.repo('here', root=me)
+        other = self.repo('other', root=me)
+        self.assertEqual(oas_ui.scan_workspaces(self.scan_root, here), [other])
+
     def test_enter_on_directory_sets_workspace_and_launches(self):
         launcher = self.enter_workspace_screen()
         launcher.cursor['workspace'] = 0

@@ -45,18 +45,31 @@ def display_path(path, home):
 
 
 def scan_workspaces(scan_root, cwd):
+    """Git repositories directly under scan_root or one level deeper.
+
+    The home layout keeps repos at ~/code/<group>/<repo>, so a group folder
+    that is not itself a repo is scanned for repos. The current workspace is
+    left out.
+    """
     scan_root = Path(scan_root)
     if not scan_root.is_dir():
         return []
     cwd_resolved = Path(cwd).resolve()
     result = []
-    for child in scan_root.iterdir():
-        if not child.is_dir() or not (child / '.git').exists():
+    for child in sorted(scan_root.iterdir(), key=lambda p: p.name):
+        if not child.is_dir() or child.name.startswith('.'):
             continue
-        if child.resolve() == cwd_resolved:
+        if (child / '.git').exists():
+            if child.resolve() != cwd_resolved:
+                result.append(child)
             continue
-        result.append(child)
-    return sorted(result, key=lambda p: p.name)
+        for grandchild in sorted(child.iterdir(), key=lambda p: p.name):
+            if not grandchild.is_dir() or not (grandchild / '.git').exists():
+                continue
+            if grandchild.resolve() == cwd_resolved:
+                continue
+            result.append(grandchild)
+    return result
 
 
 def _value_after(cmd, flag):
