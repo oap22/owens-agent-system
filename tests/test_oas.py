@@ -178,23 +178,20 @@ class OASTest(unittest.TestCase):
             self.assertEqual(oas.hook_workspace(io.StringIO(bad)), oas.os.getcwd(), bad)
 
     def test_native_tutor_controls(self):
-        self.assertIn('plan', oas.command('claude', 'tutor', self.root, 'Teach me'))
         self.assertIn('ask', oas.command('cursor', 'tutor', self.root, 'Teach me'))
         self.assertIn('--deny-tool', oas.command('copilot', 'tutor', self.root, 'Teach me'))
 
     def test_claude_native_permission_modes(self):
-        expected = {
-            'development': 'auto',
-            'research': 'auto',
-            'ops': 'default',
-            'tutor': 'plan',
-        }
-        for mode, permission_mode in expected.items():
+        for mode in ('development', 'research', 'ops', 'tutor'):
             cmd = oas.command('claude', mode, self.root, 'Task')
-            index = cmd.index('--permission-mode')
-            self.assertEqual(cmd[index + 1], permission_mode, mode)
-            self.assertNotIn('acceptEdits', cmd)
-            self.assertNotIn('bypassPermissions', cmd)
+            self.assertEqual(cmd.count('--permission-mode'), 1, mode)
+            self.assertEqual(cmd[cmd.index('--permission-mode') + 1], 'auto', mode)
+            for other in ('plan', 'default', 'acceptEdits', 'bypassPermissions', 'dontAsk',
+                          '--dangerously-skip-permissions', '--allow-dangerously-skip-permissions'):
+                self.assertNotIn(other, cmd, (mode, other))
+        # Auto mode does not make an unaudited unattended job launchable.
+        with self.assertRaisesRegex(ValueError, 'Unattended'):
+            oas.command('claude', 'unattended', self.root, 'job')
         settings = json.loads((Path(__file__).parents[1] / 'adapters/claude/settings.json').read_text())
         self.assertEqual(settings['permissions']['defaultMode'], 'auto')
         self.assertEqual(settings['permissions']['disableBypassPermissionsMode'], 'disable')
@@ -519,6 +516,24 @@ class OASTest(unittest.TestCase):
         with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(oas.main(['check', '--skills-root', str(self.root / 'absent')]), 0)
         self.assertIn('skills repo not present; routing check skipped', err.getvalue())
+
+    def test_unrouted_repo_skill_warns(self):
+        skills = self.root / 'skills'
+        for name in [*oas.routed_skills(), 'brand-new-skill']:
+            (skills / name).mkdir(parents=True)
+            (skills / name / 'SKILL.md').write_text(f'---\nname: {name}\n---\n')
+        (skills / 'not-a-skill').mkdir()
+        (skills / 'session-handoff/handoff-template.md').write_bytes((oas.ROOT / 'templates/handoff.md').read_bytes())
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            oas.check(skills_root=skills, claude_skills=skills)
+        self.assertIn('not routed by any workflow: brand-new-skill', err.getvalue())
+        self.assertNotIn('not-a-skill', err.getvalue())
+        (skills / 'brand-new-skill/SKILL.md').unlink()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            oas.check(skills_root=skills, claude_skills=skills)
+        self.assertEqual(err.getvalue(), '')
 
     def test_routed_skill_missing_for_claude_warns(self):
         skills, claude = self.root / 'skills', self.root / 'claude-skills'

@@ -8,4 +8,4 @@
 6. At source-gathering, experiment-design, execution, and synthesis boundaries, checkpoint the claim ledger, source locations, data identity, raw-output paths, unresolved confounds, and next question. After compaction or resume, verify those artifacts and any changing external source before relying on them; a generated summary is not evidence.
 7. Synthesize the answer with uncertainty and a concrete next experiment. Verify each material citation supports the sentence attached to it. Source-linked generated notes are not proof Owen learned the material.
 
-Skill routing: `research-principles`, `research-question`, `research-survey`, `research-ingest`, `paper-review`, `research-loop`, `run-design`, `rosie`.
+Skill routing: `research-principles`, `research-question`, `research-survey`, `research-ingest`, `paper-review`, `cite-check`, `research-loop`, `run-design`, `rosie`, `aliquot`, `project-status-doc`.

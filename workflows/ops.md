@@ -9,4 +9,4 @@
 7. Before a long operation crosses a phase boundary, checkpoint the verified account, retrieval time and timezone, source cursor or record IDs, draft-versus-sent state, authorization boundary, and next action. After compaction or resume, re-fetch time-sensitive state and reverify identity before any mutation; never treat the summary as current external state.
 8. Report actionable changes or blockers once. Notify again on meaningful change or recovery. Never describe missing data as an empty inbox or a conflict-free schedule.
 
-Skill routing: `day-check`, `daily-note`, `mail-digest`, `calendar-block`, `draft-outreach`, `log-outreach`, and vault maintainers. Drafts stay drafts.
+Skill routing: `day-check`, `morning-interview`, `daily-note`, `mail-digest`, `brain-mail-ingest`, `calendar-block`, `meeting-notes`, `draft-outreach`, `log-outreach`, `collaborator-sweep`, `owen-voice`, `weekly-review`, `local-routine`, `deep-interview`, `resume-build`; vault with `vault-librarian`, `vault-lifecycle`, `vault-triage`, `note-canvas-edit`; machine with `home-layout`, `reclaim-disk-space`; skills with `skillify`, `owen-skills-guide`, `bro`. Drafts stay drafts.

@@ -139,7 +139,7 @@ def expected_label(agent, mode):
     if agent == 'codex':
         return oas.config(mode)['sandbox_mode']
     if agent == 'claude':
-        return 'plan' if mode == 'tutor' else ('manual' if mode == 'ops' else 'auto')
+        return 'auto'
     if agent == 'copilot':
         return 'plan' if mode == 'tutor' else 'interactive'
     if agent == 'opencode':

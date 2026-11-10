@@ -5,7 +5,7 @@ The shared system is portable. Permission enforcement and session management bel
 | Agent | Launch adapter | Instruction bundle | Permission mapping | Validation |
 |---|---|---|---|---|
 | Codex | `--agent codex` | `AGENTS.md` | Explicit TOML overrides; workspace sandbox, auto-review; tutor read-only | Strict config/runtime checks; see build report |
-| Claude Code | `--agent claude` | `CLAUDE.md` | `auto` for dev/research, `default` (shown as Manual) for ops, `plan` for tutoring; bypass disabled in supplied settings; guidance via `--append-system-prompt`, task as the final prompt | Current CLI must expose `auto`; local argument parsing and settings checked; no paid model run |
+| Claude Code | `--agent claude` | `CLAUDE.md` | `auto` for every workflow; bypass disabled in supplied settings; guidance via `--append-system-prompt`, task as the final prompt | Current CLI must expose `auto`; local argument parsing and settings checked; no paid model run |
 | Cursor Agent | `--agent cursor` | `.cursor/rules/owen-agent-system.mdc` | Sandbox enabled; auto-review for dev/research; ask mode for tutoring | Installed 2026.08.11-e8db854 help checked; no model run |
 | GitHub Copilot CLI | `--agent copilot` | `.github/copilot-instructions.md` | Interactive approvals inherited; tutor plan with shell/write tools denied | Installed 1.0.83 help checked; no model run; no OS sandbox configured by adapter |
 | Any other agent | `bundle --agent generic` | `AGENTS.md` | Configure its own native controls | Prompt compatibility only |
@@ -47,7 +47,7 @@ The Claude desktop app has three tabs. Only the **Code** tab runs Claude Code. I
 | `~/.claude/settings.json` (`disableBypassPermissionsMode`, permission rules, hooks, `env`) | Applies | Settings files are shared |
 | Skills symlinked into `~/.claude/skills/` | Load | Local sessions load personal skills from that folder |
 | MCP servers in `~/.claude.json` or `.mcp.json` | Load | Desktop also adds servers from `claude_desktop_config.json` |
-| `--permission-mode` per OAS mode | Manual choice | Pick Auto, Manual, or Plan in the mode selector; `permissions.defaultMode` in settings sets the default for new sessions |
+| `--permission-mode auto` | Settings default | OAS uses `auto` for every workflow; `permissions.defaultMode: "auto"` in `~/.claude/settings.json` gives Desktop the same default |
 | `--model`, `--effort` | Manual choice | Model dropdown and effort menu |
 | `--append-system-prompt` workflow and task | No equivalent | Desktop has no flag input; the managed block covers workflow selection |
 | `--agents` inline `implementor` rungs | No equivalent | Desktop has no inline agents flag; a file in `~/.claude/agents/` would be needed |

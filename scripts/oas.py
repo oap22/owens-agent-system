@@ -359,11 +359,11 @@ def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=
             extra['agents'] = implementor_overlays(workspace, worker, materialize)
         return ['codex', '--strict-config', *overrides(mode, extra), *model_flag, '-C', str(workspace), message]
     if agent == 'claude':
-        # Claude's auto mode is the native low-friction counterpart to the
-        # auto-review modes used by Codex and Cursor. Keep operations on the
-        # ordinary prompt path and tutoring read-only; never substitute the
-        # unrestricted bypassPermissions mode.
-        native_mode = 'plan' if mode == 'tutor' else ('default' if mode == 'ops' else 'auto')
+        # Every Claude workflow runs in auto mode, the classifier-backed
+        # counterpart to the auto-review modes used by Codex and Cursor. The
+        # workflow text, not the permission mode, keeps tutoring free of
+        # solution code. Never substitute the unrestricted bypassPermissions mode.
+        native_mode = 'auto'
         # Guidance is system-level context for Claude Code; the raw task is the user turn.
         if task.lstrip().startswith('-'):
             raise ValueError('Claude receives the task as a positional prompt; it must not start with a dash')
@@ -1032,6 +1032,11 @@ def check(skills_root=None, claude_skills=None):
         for name in sorted(routed_skills()):
             if not (skills_root / name).is_dir():
                 print(f'WARNING: routed skill `{name}` has no directory under {skills_root}', file=sys.stderr)
+        # Every skill in the repo belongs to at least one workflow's routing line.
+        unrouted = sorted(p.name for p in skills_root.iterdir()
+                          if (p / 'SKILL.md').is_file() and p.name not in routed_skills())
+        if unrouted:
+            print(f'WARNING: skills in {skills_root} not routed by any workflow: {", ".join(unrouted)}', file=sys.stderr)
         # A skill in the repo still needs a Claude target in the skills manifest;
         # vault-only skills load only in sessions started inside the vault.
         claude_skills = Path(claude_skills) if claude_skills else Path.home() / '.claude/skills'
