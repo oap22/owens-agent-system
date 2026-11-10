@@ -18,6 +18,11 @@ oas = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(oas)
 
 
+def without_skip(stderr):
+    """Drop the warning a fixture without a catalog exporter always prints."""
+    return ''.join(line for line in stderr.splitlines(keepends=True) if 'catalog check skipped' not in line)
+
+
 class OASTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -503,7 +508,7 @@ class OASTest(unittest.TestCase):
         err = io.StringIO()
         with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
             oas.check(skills_root=skills, claude_skills=skills)
-        self.assertEqual(err.getvalue(), '')
+        self.assertEqual(without_skip(err.getvalue()), '')
         (skills / 'plan-then-ship').rmdir()
         err, out = io.StringIO(), io.StringIO()
         with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out), \
@@ -533,7 +538,7 @@ class OASTest(unittest.TestCase):
         err = io.StringIO()
         with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
             oas.check(skills_root=skills, claude_skills=skills)
-        self.assertEqual(err.getvalue(), '')
+        self.assertEqual(without_skip(err.getvalue()), '')
 
     def test_routed_skill_missing_for_claude_warns(self):
         skills, claude = self.root / 'skills', self.root / 'claude-skills'
@@ -584,6 +589,178 @@ class OASTest(unittest.TestCase):
         with patch.object(oas.Path, 'home', return_value=home), contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
             oas.check()
         self.assertIn('has no directory under ' + str(home / 'Developer/active/personal/skills/skills'), err.getvalue())
+
+    def catalog_repo(self, records=None):
+        repo = self.root / 'catalog-repo'
+        (repo / 'scripts').mkdir(parents=True, exist_ok=True)
+        (repo / 'skills').mkdir(exist_ok=True)
+        if records is None:
+            records = []
+            for name in sorted(oas.routed_skills()):
+                source = f'skills/{name}/SKILL.md'
+                path = repo / source
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f'# {name}\n', encoding='utf-8')
+                records.append(dict(name=name, description=f'{name} procedure', source=source, targets=['claude']))
+            (repo / 'skills/session-handoff/handoff-template.md').write_bytes((oas.ROOT / 'templates/handoff.md').read_bytes())
+        (repo / 'catalog.json').write_text(json.dumps({
+            'schema_version': oas.SKILLS_CATALOG_SCHEMA_VERSION, 'skills': records}), encoding='utf-8')
+        (repo / 'scripts/export_catalog.py').write_text(
+            'from pathlib import Path\n'
+            'print((Path(__file__).parents[1] / "catalog.json").read_text(encoding="utf-8"))\n', encoding='utf-8')
+        return repo
+
+    def check_repo(self, repo):
+        oas.check(skills_root=repo / 'skills', claude_skills=repo / 'skills')
+
+    def test_skill_catalog_success_and_missing_route_failure(self):
+        repo = self.catalog_repo()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            self.check_repo(repo)
+        self.assertEqual(err.getvalue(), '')
+        catalog = json.loads((repo / 'catalog.json').read_text(encoding='utf-8'))
+        catalog['skills'] = [r for r in catalog['skills'] if r['name'] != 'plan-then-ship']
+        (repo / 'catalog.json').write_text(json.dumps(catalog), encoding='utf-8')
+        with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(ValueError, 'missing from the skills catalog: plan-then-ship'):
+                self.check_repo(repo)
+            self.assertEqual(oas.main(['check', '--skills-root', str(repo / 'skills')]), 2)
+
+    def test_check_succeeds_against_real_skills_exporter_when_available(self):
+        import pwd  # setUp fakes HOME; the real checkout lives under the account's home.
+        repo = Path(pwd.getpwuid(oas.os.getuid()).pw_dir) / 'code/me/skills'
+        if not (repo / 'scripts/export_catalog.py').is_file():
+            self.skipTest('canonical skills checkout is not available')
+        self.assertTrue(oas.routed_skills() <= oas.exported_skills(repo))
+
+    def test_catalog_exporter_and_schema_failures(self):
+        repo = self.catalog_repo()
+        exporter = repo / 'scripts/export_catalog.py'
+        for body, pattern in (
+                ('raise SystemExit(7)\n', 'exited 7'),
+                ('print("not json")\n', 'malformed JSON'),
+                ('print(\'{"schema_version": 2, "skills": []}\')\n', 'unsupported.*schema_version'),
+                ('print(\'{"schema_version": 1, "skills": [{"name": "broken"}]}\')\n', 'record 0'),
+                ('print(\'{"schema_version": 1, "skills": [], "skills": []}\')\n', 'duplicate JSON key')):
+            exporter.write_text(body, encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, pattern):
+                oas.exported_skills(repo)
+        exporter.unlink()
+        exporter.symlink_to(repo / 'catalog.json')
+        with self.assertRaisesRegex(ValueError, 'exporter is missing or not a regular file'):
+            oas.exported_skills(repo)
+
+    def test_catalog_rejects_duplicate_names_and_escaping_sources(self):
+        record = dict(name='same', description='procedure', source='skills/same/SKILL.md', targets=['claude'])
+        repo = self.catalog_repo([record, dict(record)])
+        source = repo / record['source']; source.parent.mkdir(parents=True); source.write_text('# same\n', encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'duplicate skill name'):
+            oas.exported_skills(repo)
+        (repo.parent / 'outside.md').write_text('outside\n', encoding='utf-8')
+        escaped = dict(record, source='../outside.md')
+        (repo / 'catalog.json').write_text(json.dumps({'schema_version': 1, 'skills': [escaped]}), encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'relative, non-escaping'):
+            oas.exported_skills(repo)
+
+    def test_catalog_rejects_duplicate_targets_and_noncanonical_source(self):
+        record = dict(name='same', description='procedure', source='skills/same/SKILL.md', targets=['codex', 'codex'])
+        repo = self.catalog_repo([record])
+        source = repo / record['source']; source.parent.mkdir(parents=True); source.write_text('# same\n', encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'duplicate targets'):
+            oas.exported_skills(repo)
+        (repo / 'skills/same/OTHER.md').write_text('other\n', encoding='utf-8')
+        record.update(targets=['unregistered-future-target'], source='skills/same/OTHER.md')
+        (repo / 'catalog.json').write_text(json.dumps({'schema_version': 1, 'skills': [record]}), encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'source must be skills/same/SKILL.md'):
+            oas.exported_skills(repo)
+
+    def test_catalog_export_ignores_hostile_python_environment(self):
+        repo = self.catalog_repo()
+        hostile = self.root / 'hostile'; hostile.mkdir()
+        marker = self.root / 'sitecustomize-ran'
+        (hostile / 'sitecustomize.py').write_text(
+            f'from pathlib import Path\nPath({str(marker)!r}).write_text("ran", encoding="utf-8")\n', encoding='utf-8')
+        with patch.dict(oas.os.environ, {'PYTHONPATH': str(hostile)}):
+            oas.exported_skills(repo)
+        self.assertFalse(marker.exists())
+
+    def test_catalog_export_times_out_and_bounds_output(self):
+        repo = self.catalog_repo()
+        exporter = repo / 'scripts/export_catalog.py'
+        exporter.write_text('import time\ntime.sleep(60)\n', encoding='utf-8')
+        with patch.object(oas, 'SKILLS_EXPORT_TIMEOUT_SECONDS', 0.05):
+            with self.assertRaisesRegex(ValueError, 'timed out'):
+                oas.exported_skills(repo)
+        exporter.write_text(f'import sys\nsys.stdout.write("x" * {2 * 1024 * 1024})\n', encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'stdout exceeded'):
+            oas.exported_skills(repo)
+
+    def test_catalog_error_detail_is_capped_and_terminal_safe(self):
+        repo = self.catalog_repo()
+        (repo / 'scripts/export_catalog.py').write_text(
+            'import sys\nsys.stderr.write("\\x1b[31mBAD\\n" + "z" * 5000)\nraise SystemExit(9)\n', encoding='utf-8')
+        with self.assertRaises(ValueError) as ctx:
+            oas.exported_skills(repo)
+        message = str(ctx.exception)
+        self.assertNotIn('\x1b', message)
+        self.assertIn('\\u001b', message)
+        self.assertLessEqual(len(message), oas.SKILLS_ERROR_DETAIL_CHARS + 100)
+
+    def test_catalog_producer_compatible_string_constraints(self):
+        base = dict(name='same', description='procedure', source='skills/same/SKILL.md', targets=['claude'])
+        repo = self.catalog_repo([base])
+        source = repo / base['source']; source.parent.mkdir(parents=True); source.write_text('# same\n', encoding='utf-8')
+        cases = [(dict(base, description=d), 'description')
+                 for d in ('x' * 1025, 'bad\nline', 'bad\rline', 'bad line', 'bad line', '\ud800')]
+        cases += [(dict(base, targets=[t]), 'targets') for t in ('Bad_Target', 'x' * 65, '\ud800')]
+        for record, pattern in cases:
+            (repo / 'catalog.json').write_text(json.dumps({'schema_version': 1, 'skills': [record]}), encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, pattern):
+                oas.exported_skills(repo)
+
+    def test_catalog_rejects_symlinked_skills_root_and_skill_directory(self):
+        repo = self.catalog_repo()
+        real_skills = repo / 'real-skills'
+        (repo / 'skills').rename(real_skills)
+        (repo / 'skills').symlink_to(real_skills, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, 'skills root'):
+            oas.exported_skills(repo)
+        (repo / 'skills').unlink(); (repo / 'skills').mkdir()
+        name = sorted(oas.routed_skills())[0]
+        (repo / 'skills' / name).symlink_to(real_skills / name, target_is_directory=True)
+        catalog = json.loads((repo / 'catalog.json').read_text(encoding='utf-8'))
+        catalog['skills'] = [r for r in catalog['skills'] if r['name'] == name]
+        (repo / 'catalog.json').write_text(json.dumps(catalog), encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'skill directory'):
+            oas.exported_skills(repo)
+        (repo / 'skills' / name).unlink(); (repo / 'skills' / name).mkdir()
+        (repo / 'skills' / name / 'SKILL.md').symlink_to(real_skills / name / 'SKILL.md')
+        with self.assertRaisesRegex(ValueError, 'source is not a regular file'):
+            oas.exported_skills(repo)
+
+    def test_required_workflows_have_one_well_formed_route_declaration(self):
+        workflows = self.root / 'workflows'; workflows.mkdir()
+        for mode in oas.SKILL_ROUTE_MODES:
+            (workflows / f'{mode}.md').write_text(f'# {mode}\n\nSkill routing: `professor`.\n', encoding='utf-8')
+        (workflows / 'unattended.md').write_text('# unattended\n', encoding='utf-8')
+        with patch.object(oas, 'ROOT', self.root):
+            self.assertEqual(oas.routed_skills(), {'professor', oas.COMPACT_SKILL})
+            for body, pattern in (
+                    ('Skills routing: `professor`.', 'development.*exactly one'),
+                    ('Skill routing: `professor`.\nSkill routing: `tdd`.', 'development.*exactly one'),
+                    ('Skill routing: `professor.', 'development.*backtick'),
+                    ('Skill routing: none.', 'development.*at least one'),
+                    ('Skill routing: `tdd`, `tdd`.', 'development.*duplicate'),
+                    ('Skill routing: `Bad_Name`.', 'development.*invalid skill name')):
+                (workflows / 'development.md').write_text(f'# development\n\n{body}\n', encoding='utf-8')
+                with self.assertRaisesRegex(ValueError, pattern):
+                    oas.routed_skills()
+
+    def test_check_validates_routes_even_without_skills_repo(self):
+        with patch.object(oas, 'routed_skills', side_effect=ValueError('bad route')):
+            with self.assertRaisesRegex(ValueError, 'bad route'):
+                oas.check(skills_root=self.root / 'no-skills')
 
     def test_lead_effort_maps_per_harness(self):
         cmd = oas.command('codex', 'development', self.root, 'Task', lead_effort='xhigh')

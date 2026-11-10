@@ -53,6 +53,13 @@ CHARS_PER_TOKEN = 3.2
 GUIDANCE_BUDGET_TOKENS = 3500
 # Canonical skills checkout, newest layout first; the routing drift check uses the first that exists.
 SKILLS_ROOTS = ('code/me/skills/skills', 'Developer/active/personal/skills/skills')
+SKILLS_CATALOG_SCHEMA_VERSION = 1
+SKILL_NAME_PATTERN = re.compile(r'[a-z0-9]+(?:-[a-z0-9]+)*\Z')
+SKILL_ROUTE_MODES = ('development', 'research', 'ops', 'tutor')
+SKILLS_EXPORT_TIMEOUT_SECONDS = 10
+SKILLS_EXPORT_STDOUT_BYTES = 1024 * 1024
+SKILLS_EXPORT_STDERR_BYTES = 64 * 1024
+SKILLS_ERROR_DETAIL_CHARS = 1024
 TOKEN_CALIBRATION = 'evals/token-calibration.json'
 RUN_RESULTS = ('pass', 'fail', 'partial')
 RUN_LOG = 'evals/runs.jsonl'
@@ -984,12 +991,163 @@ def bundle(mode, agent, output, task, shared=True):
 
 
 def routed_skills():
-    """Skill names referenced by `Skill routing:` lines in the workflows and by the compaction hook."""
+    """Validate and return the skill names routed by the interactive workflows, plus the compaction hook's skill."""
     names = {COMPACT_SKILL}
-    for path in sorted((ROOT / 'workflows').glob('*.md')):
-        for line in read(path).splitlines():
-            if line.startswith('Skill routing:'):
-                names.update(re.findall(r'`([^`]+)`', line))
+    for mode in SKILL_ROUTE_MODES:
+        lines = read(ROOT / f'workflows/{mode}.md').splitlines()
+        declarations = [line for line in lines if line.startswith('Skill routing:')]
+        if len(declarations) != 1:
+            raise ValueError(f'{mode} workflow must contain exactly one Skill routing: declaration')
+        body = declarations[0].removeprefix('Skill routing:').strip()
+        routed = re.findall(r'`([^`]+)`', body)
+        if body.count('`') != len(routed) * 2:
+            raise ValueError(f'{mode} Skill routing declaration has unmatched backtick markup')
+        if not routed:
+            raise ValueError(f'{mode} Skill routing declaration must name at least one skill')
+        if len(set(routed)) != len(routed):
+            raise ValueError(f'{mode} Skill routing declaration contains duplicate names')
+        for name in routed:
+            if len(name) > 64 or not SKILL_NAME_PATTERN.fullmatch(name):
+                raise ValueError(f'{mode} Skill routing declaration has invalid skill name {name!r}')
+        names.update(routed)
+    return names
+
+
+def _unique_json_object(pairs):
+    """Reject duplicate JSON object keys instead of silently keeping the last value."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f'skills catalog contains duplicate JSON key: {key!r}')
+        result[key] = value
+    return result
+
+
+def _has_surrogate(value):
+    return any(0xD800 <= ord(character) <= 0xDFFF for character in value)
+
+
+def _bounded_file_bytes(stream, limit, label):
+    stream.seek(0, os.SEEK_END)
+    size = stream.tell()
+    if size > limit:
+        raise ValueError(f'skills catalog exporter {label} exceeded {limit} bytes')
+    stream.seek(0)
+    return stream.read()
+
+
+def _safe_process_detail(data):
+    """Render bounded subprocess diagnostics without terminal control characters."""
+    text = data.decode('utf-8', errors='replace').strip()
+    escaped = json.dumps(text, ensure_ascii=True)[1:-1]
+    if len(escaped) > SKILLS_ERROR_DETAIL_CHARS:
+        return escaped[:SKILLS_ERROR_DETAIL_CHARS] + '...'
+    return escaped
+
+
+def exported_skills(skills_repo):
+    """Run the canonical skills exporter and validate its schema-v1 projection."""
+    repo = Path(skills_repo).expanduser().resolve(strict=True)
+    if not repo.is_dir():
+        raise ValueError(f'skills repository is not a directory: {repo}')
+    exporter = repo / 'scripts/export_catalog.py'
+    if exporter.is_symlink() or not exporter.is_file():
+        raise ValueError(f'skills catalog exporter is missing or not a regular file: {exporter}')
+    try:
+        exporter_resolved = exporter.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError(f'cannot resolve skills catalog exporter: {exc}') from exc
+    if exporter_resolved != repo and repo not in exporter_resolved.parents:
+        raise ValueError('skills catalog exporter resolves outside the skills repository')
+    with tempfile.TemporaryFile(mode='w+b') as stdout_file, tempfile.TemporaryFile(mode='w+b') as stderr_file:
+        process = subprocess.Popen(
+            [sys.executable, '-E', '-s', str(exporter), '--repo', str(repo)],
+            cwd=repo,
+            stdin=subprocess.DEVNULL,
+            stdout=stdout_file,
+            stderr=stderr_file,
+            env={'PATH': os.defpath},
+        )
+        try:
+            returncode = process.wait(timeout=SKILLS_EXPORT_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            raise ValueError(
+                f'skills catalog exporter timed out after {SKILLS_EXPORT_TIMEOUT_SECONDS} seconds'
+            ) from None
+        stdout = _bounded_file_bytes(stdout_file, SKILLS_EXPORT_STDOUT_BYTES, 'stdout')
+        stderr = _bounded_file_bytes(stderr_file, SKILLS_EXPORT_STDERR_BYTES, 'stderr')
+    if returncode != 0:
+        detail = _safe_process_detail(stderr)
+        suffix = f': {detail}' if detail else ''
+        raise ValueError(f'skills catalog exporter exited {returncode}{suffix}')
+    try:
+        output = stdout.decode('utf-8', errors='strict')
+        catalog = json.loads(output, object_pairs_hook=_unique_json_object)
+    except (UnicodeError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f'skills catalog exporter returned malformed JSON: {exc}') from exc
+    if not isinstance(catalog, dict):
+        raise ValueError('skills catalog must be a JSON object')
+    if set(catalog) != {'schema_version', 'skills'}:
+        raise ValueError('skills catalog must contain exactly schema_version and skills')
+    version = catalog['schema_version']
+    if isinstance(version, bool) or not isinstance(version, int) or version != SKILLS_CATALOG_SCHEMA_VERSION:
+        raise ValueError(
+            f'unsupported skills catalog schema_version {version!r}; '
+            f'expected {SKILLS_CATALOG_SCHEMA_VERSION}'
+        )
+    if not isinstance(catalog['skills'], list):
+        raise ValueError('skills catalog skills must be a list')
+    skills_root = repo / 'skills'
+    if skills_root.is_symlink() or not skills_root.is_dir():
+        raise ValueError('skills catalog skills root must be a regular directory')
+    names = set()
+    required = {'name', 'description', 'source', 'targets'}
+    for index, record in enumerate(catalog['skills']):
+        label = f'skills catalog record {index}'
+        if not isinstance(record, dict) or set(record) != required:
+            raise ValueError(f'{label} must contain exactly name, description, source, and targets')
+        name = record['name']
+        if (not isinstance(name, str) or _has_surrogate(name) or len(name) > 64 or
+                not SKILL_NAME_PATTERN.fullmatch(name)):
+            raise ValueError(f'{label} has invalid name {name!r}')
+        if name in names:
+            raise ValueError(f'skills catalog contains duplicate skill name: {name}')
+        names.add(name)
+        description = record['description']
+        if (not isinstance(description, str) or not description.strip() or len(description) > 1024 or
+                any(separator in description for separator in ('\r', '\n', '\u2028', '\u2029')) or
+                _has_surrogate(description)):
+            raise ValueError(f'{label} has invalid description')
+        targets = record['targets']
+        if (not isinstance(targets, list) or not targets or any(
+                not isinstance(target, str) or _has_surrogate(target) or len(target) > 64 or
+                not SKILL_NAME_PATTERN.fullmatch(target) for target in targets)):
+            raise ValueError(f'{label} has invalid targets')
+        if len(set(targets)) != len(targets):
+            raise ValueError(f'{label} has duplicate targets')
+        source_value = record['source']
+        if not isinstance(source_value, str) or not source_value:
+            raise ValueError(f'{label} has invalid source')
+        source = Path(source_value)
+        if source.is_absolute() or '..' in source.parts:
+            raise ValueError(f'{label} source must be a relative, non-escaping path')
+        expected_source = f'skills/{name}/SKILL.md'
+        if source_value != expected_source:
+            raise ValueError(f'{label} source must be {expected_source}')
+        skill_directory = skills_root / name
+        if skill_directory.is_symlink() or not skill_directory.is_dir():
+            raise ValueError(f'{label} skill directory must be a regular directory')
+        source_path = repo / source
+        if source_path.is_symlink() or not source_path.is_file():
+            raise ValueError(f'{label} source is not a regular file: {source_value}')
+        try:
+            source_resolved = source_path.resolve(strict=True)
+        except OSError as exc:
+            raise ValueError(f'{label} source cannot be resolved: {exc}') from exc
+        if source_resolved != repo and repo not in source_resolved.parents:
+            raise ValueError(f'{label} source resolves outside the skills repository')
     return names
 
 
@@ -1028,20 +1186,29 @@ def check(skills_root=None, claude_skills=None):
     if skills_root is None:
         skills_root = next((Path.home() / r for r in SKILLS_ROOTS if (Path.home() / r).is_dir()), Path.home() / SKILLS_ROOTS[0])
     skills_root = Path(skills_root)
+    routes = routed_skills()
     if skills_root.is_dir():
-        for name in sorted(routed_skills()):
-            if not (skills_root / name).is_dir():
-                print(f'WARNING: routed skill `{name}` has no directory under {skills_root}', file=sys.stderr)
+        # The skills repo's own exporter is the source of truth for skill names; a route
+        # it does not list is a typo or a deleted skill, so the check fails.
+        if (skills_root.parent / 'scripts/export_catalog.py').is_file():
+            missing = sorted(routes - exported_skills(skills_root.parent))
+            if missing:
+                raise ValueError('routed skills missing from the skills catalog: ' + ', '.join(missing))
+        else:
+            print(f'WARNING: no catalog exporter at {skills_root.parent / "scripts/export_catalog.py"}; catalog check skipped', file=sys.stderr)
+            for name in sorted(routes):
+                if not (skills_root / name).is_dir():
+                    print(f'WARNING: routed skill `{name}` has no directory under {skills_root}', file=sys.stderr)
         # Every skill in the repo belongs to at least one workflow's routing line.
         unrouted = sorted(p.name for p in skills_root.iterdir()
-                          if (p / 'SKILL.md').is_file() and p.name not in routed_skills())
+                          if (p / 'SKILL.md').is_file() and p.name not in routes)
         if unrouted:
             print(f'WARNING: skills in {skills_root} not routed by any workflow: {", ".join(unrouted)}', file=sys.stderr)
         # A skill in the repo still needs a Claude target in the skills manifest;
         # vault-only skills load only in sessions started inside the vault.
         claude_skills = Path(claude_skills) if claude_skills else Path.home() / '.claude/skills'
         if claude_skills.is_dir():
-            missing = sorted(n for n in routed_skills() if (skills_root / n).is_dir() and not (claude_skills / n).exists())
+            missing = sorted(n for n in routes if (skills_root / n).is_dir() and not (claude_skills / n).exists())
             if missing:
                 print(f'WARNING: routed skills not installed for Claude Code in {claude_skills}: {", ".join(missing)}; '
                       'sessions outside the vault cannot load them', file=sys.stderr)
