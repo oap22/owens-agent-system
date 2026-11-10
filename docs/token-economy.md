@@ -1,6 +1,6 @@
 # Token economy
 
-Optimize cost per completed task. Start with one agent, explicit acceptance criteria, and appropriate effort. Current model IDs and source-backed starting points are in [[docs/models]].
+Optimize cost per completed task. Start with one agent, explicit acceptance criteria, and appropriate effort. OAS keeps no model list; check current model IDs in each provider's documentation.
 
 ## Reduce repeated work
 

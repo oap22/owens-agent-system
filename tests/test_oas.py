@@ -199,15 +199,15 @@ class OASTest(unittest.TestCase):
         self.assertEqual(settings['permissions']['defaultMode'], 'auto')
         self.assertEqual(settings['permissions']['disableBypassPermissionsMode'], 'disable')
 
-    def test_claude_auto_rejects_known_ineligible_models(self):
-        for mode in ('development', 'research'):
-            for model in ('haiku', 'claude-haiku-4-5', 'claude-3-opus', 'claude-sonnet-4-5', 'claude-opus-4.5'):
-                with self.assertRaisesRegex(ValueError, 'auto mode', msg=f'{mode}/{model}'):
-                    oas.command('claude', mode, self.root, 'Task', model=model)
-        for mode in ('ops', 'tutor'):
-            self.assertIn('haiku', oas.command('claude', mode, self.root, 'Task', model='haiku'))
-        for model in (None, 'fable', 'sonnet', 'opus', 'claude-sonnet-5', 'claude-opus-4-7'):
-            oas.command('claude', 'development', self.root, 'Task', model=model)
+    def test_model_ids_pass_through_unchecked(self):
+        # OAS keeps no model list; the agent's own CLI decides what an id means.
+        for mode in ('development', 'tutor'):
+            for model in ('haiku', 'claude-new-model-9', 'opus'):
+                cmd = oas.command('claude', mode, self.root, 'Task', model=model)
+                self.assertEqual(cmd[cmd.index('--model') + 1], model)
+        self.assertNotIn('--model', oas.command('claude', 'development', self.root, 'Task'))
+        with self.assertRaises(ValueError):
+            oas.command('claude', 'development', self.root, 'Task', model='bad model; rm')
 
     def test_unattended_unsupported_fails_closed(self):
         for agent in ('claude', 'cursor', 'copilot', 'opencode'):

@@ -86,15 +86,6 @@ def executable(agent, environ=None):
     return str(path)
 
 
-def claude_auto_model_known_ineligible(model):
-    """True only for model identifiers Anthropic explicitly excludes from auto mode."""
-    if model is None:
-        return False
-    normalized = model.lower().replace('_', '-').replace('.', '-')
-    return ('haiku' in normalized or normalized.startswith('claude-3-') or
-            re.search(r'(?:sonnet|opus)-4-5(?:-|$)', normalized) is not None)
-
-
 def read(path):
     return Path(path).read_text(encoding='utf-8')
 
@@ -346,8 +337,6 @@ def command(agent, mode, workspace, task, shared='auto', home=None, lead_effort=
     workspace = workspace_path(workspace)
     if model is not None and not re.fullmatch(MODEL_PATTERN, model):
         raise ValueError('Model must be a plain alias or model identifier')
-    if agent == 'claude' and mode in ('development', 'research') and claude_auto_model_known_ineligible(model):
-        raise ValueError(f'Claude auto mode is unavailable for model {model}; choose Fable, a supported Sonnet/Opus model, or inherit an eligible default')
     # Every native CLI takes the session model as a flag; None inherits the user's own default.
     model_flag = ['--model', model] if model else []
     include, _ = shared_decision(agent, shared, home)

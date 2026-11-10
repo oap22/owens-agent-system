@@ -48,7 +48,6 @@ class OASUITestBase(unittest.TestCase):
         kwargs.setdefault('scan_root', self.scan_root)
         kwargs.setdefault('cwd', self.cwd)
         kwargs.setdefault('which', which or always_which())
-        kwargs.setdefault('list_models', lambda agent: ['m-one', 'm-two'])
         return oas_ui.Launcher(**kwargs)
 
     def repo(self, name, root=None):
@@ -249,8 +248,6 @@ class WorkspaceScreenTest(OASUITestBase):
         launcher.screen = 'agent'
         launcher.cursor['agent'] = 0
         launcher.key('enter')
-        self.assertEqual(launcher.screen, 'model')
-        launcher.key('enter')  # inherit the agent's default model
         self.assertEqual(launcher.screen, 'workspace')
         return launcher
 
@@ -299,8 +296,6 @@ class WorkspaceScreenTest(OASUITestBase):
         launcher.screen = 'agent'
         launcher.cursor['agent'] = 0
         launcher.key('enter')
-        self.assertEqual(launcher.screen, 'model')
-        launcher.key('enter')  # inherit
         self.assertEqual(launcher.screen, 'workspace')
         rows = launcher.rows()
         self.assertEqual([r.value for r in rows], [cwd, oas_ui.PICK])
@@ -483,7 +478,6 @@ class ReturnedTest(OASUITestBase):
         launcher = self.make()
         launcher.mode = 'ops'
         launcher.agent = 'opencode'
-        launcher.model = 'm-two'
         launcher.workspace = self.cwd
         launcher.screen = 'workspace'
         launcher.returned(0)
@@ -493,9 +487,6 @@ class ReturnedTest(OASUITestBase):
         launcher.key('enter')
         self.assertEqual(launcher.screen, 'agent')
         self.assertEqual(launcher.rows()[launcher.cursor['agent']].value, 'opencode')
-        launcher.key('enter')
-        self.assertEqual(launcher.screen, 'model')
-        self.assertEqual(launcher.rows()[launcher.cursor['model']].value, 'm-two')
         launcher.key('enter')
         self.assertEqual(launcher.screen, 'workspace')
         self.assertEqual(launcher.rows()[launcher.cursor['workspace']].value, self.cwd)
@@ -688,6 +679,19 @@ class ReviewFixesTest(unittest.TestCase):
         colors = oas_screen._init_colors(True)
         self.assertEqual(set(colors.values()), {0})
 
+    def test_logo_top_rows_and_text_use_terminal_foreground(self):
+        # Fixed white made the top logo rows invisible on light backgrounds.
+        for count in (256, 8):
+            pairs = {}
+            with patch.object(curses, 'has_colors', return_value=True), \
+                    patch.object(curses, 'start_color'), patch.object(curses, 'use_default_colors'), \
+                    patch.object(curses, 'COLORS', count, create=True), \
+                    patch.object(curses, 'init_pair', side_effect=lambda i, fg, bg: pairs.__setitem__(i, fg)):
+                colors = oas_screen._init_colors(False)
+            for name in ('head', 'text'):
+                self.assertEqual(pairs[colors[name]], -1, (count, name))
+            self.assertNotEqual(pairs[colors['bright']], -1, count)
+
     def test_agent_rows_computed_once_per_screen_entry(self):
         import tempfile
         tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
@@ -790,102 +794,14 @@ class ExitNoticeTest(unittest.TestCase):
         oas_screen.wait_for_enter(read=lambda: (_ for _ in ()).throw(EOFError()))
 
 
-class ModelScreenTest(OASUITestBase):
-    def at_model(self, agent='codex', **kwargs):
-        launcher = self.make(**kwargs)
-        launcher.mode = 'development'
-        launcher.screen = 'agent'
-        launcher.cursor['agent'] = list(oas.AGENTS).index(agent)
-        launcher.key('enter')
-        self.assertEqual(launcher.screen, 'model')
-        return launcher
-
-    def test_rows_inherit_first_listed_models_then_type_row(self):
-        launcher = self.at_model()
-        rows = launcher.rows()
-        self.assertEqual([r.value for r in rows], [None, 'm-one', 'm-two', oas_ui.TYPE_MODEL])
-        self.assertEqual(rows[0].text, oas_ui.INHERIT)
-        self.assertNotIn('m-one', launcher.title())
-
-    def test_claude_auto_disables_known_ineligible_model(self):
-        launcher = self.at_model('claude', list_models=lambda agent: oas_ui.STATIC_MODELS[agent])
-        rows = {row.value: row for row in launcher.rows()}
-        self.assertEqual(rows['haiku'].disabled, 'auto unavailable')
-        self.assertIsNone(rows['fable'].disabled)
-        self.assertIsNone(rows['opus'].disabled)
-        self.assertIsNone(rows['sonnet'].disabled)
-
-    def test_inherit_keeps_model_none_and_launch_has_no_model_flag(self):
-        launcher = self.at_model()
-        launcher.key('enter')
-        self.assertEqual(launcher.screen, 'workspace')
-        self.assertIsNone(launcher.model)
-        with patch.object(oas.shutil, 'which', return_value='/usr/bin/codex'):
-            launcher.key('enter')
-        self.assertNotIn('--model', launcher.launch_request[0])
-
-    def test_listed_model_flows_into_breadcrumb_and_argv(self):
-        launcher = self.at_model()
-        launcher.key('down'); launcher.key('down'); launcher.key('enter')
-        self.assertEqual(launcher.model, 'm-two')
-        self.assertIn('m-two', launcher.title())
-        with patch.object(oas.shutil, 'which', return_value='/usr/bin/codex'):
-            launcher.key('enter')
-        cmd = launcher.launch_request[0]
-        self.assertEqual(cmd, oas.command('codex', 'development', self.cwd, '', 'auto', self.home, model='m-two'))
-        self.assertEqual(cmd[cmd.index('--model') + 1], 'm-two')
-
-    def test_typed_model_validated_and_escapable(self):
-        launcher = self.at_model()
-        launcher.cursor['model'] = len(launcher.rows()) - 1
-        launcher.key('enter')
-        self.assertEqual(launcher.model_entry, '')
-        self.assertEqual(launcher.footer(), oas_ui.ENTRY_FOOTER)
-        for ch in 'bad$id':
-            launcher.key(ch)
-        launcher.key('space')  # ignored: model ids never contain spaces
-        launcher.key('enter')
-        self.assertEqual(launcher.screen, 'model')
-        self.assertIn('model id', launcher.error)
-        launcher.key('esc')
-        self.assertIsNone(launcher.model_entry)
-        launcher.key('enter')
-        for ch in 'q-x':
-            launcher.key(ch)
-        self.assertFalse(launcher.quit)
-        self.assertIn('q-x', launcher.rows()[-1].text)
-        launcher.key('enter')
-        self.assertEqual(launcher.model, 'q-x')
-        self.assertEqual(launcher.screen, 'workspace')
-
-    def test_back_from_workspace_returns_to_model_with_preselection(self):
-        launcher = self.at_model()
-        launcher.key('down'); launcher.key('enter')
-        self.assertEqual(launcher.screen, 'workspace')
-        launcher.key('backspace')
-        self.assertEqual(launcher.screen, 'model')
-        self.assertEqual(launcher.rows()[launcher.cursor['model']].value, 'm-one')
-        launcher.key('backspace')
-        self.assertEqual(launcher.screen, 'agent')
-
-    def test_model_list_computed_once_per_agent(self):
-        calls = []
-        launcher = self.make(list_models=lambda agent: calls.append(agent) or ['x'])
-        launcher.mode = 'development'; launcher.screen = 'agent'; launcher.cursor['agent'] = 0
-        launcher.key('enter')
-        for _ in range(10):
-            launcher.rows()
-        self.assertEqual(calls, ['codex'])
-
-
-class ModelChoicesTest(unittest.TestCase):
-    def test_launcher_uses_one_runtime_for_availability_models_and_launch(self):
+class RuntimeSelectionTest(unittest.TestCase):
+    def test_launcher_uses_one_runtime_for_availability_and_launch(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder).resolve()
             binaries = []
             for label in ('process', 'selected'):
                 binary = root / label
-                binary.write_text('#!/bin/sh\nprintf \'%s\\n\' \'{"models":[{"slug":"' + label + '-model"}]}\'\n')
+                binary.write_text('#!/bin/sh\n')
                 binary.chmod(0o700)
                 binaries.append(binary)
             with patch.dict(os.environ, {'OAS_CODEX_BIN': str(binaries[0])}):
@@ -894,34 +810,15 @@ class ModelChoicesTest(unittest.TestCase):
                 launcher.key('enter')
                 self.assertIsNone(launcher.rows()[0].disabled)
                 launcher.key('enter')
-                self.assertEqual([row.value for row in launcher.rows()][1:-1], ['selected-model'])
-                launcher.key('down'); launcher.key('enter'); launcher.key('enter')
+                self.assertEqual(launcher.screen, 'workspace')
+                launcher.key('enter')
                 cmd, workspace = launcher.launch_request
                 self.assertEqual(cmd[0], str(binaries[1]))
-                self.assertEqual(cmd[cmd.index('--model') + 1], 'selected-model')
+                self.assertNotIn('--model', cmd)
                 self.assertEqual(workspace, root)
 
-    def test_parse_codex_json_cursor_text_opencode_text(self):
-        codex = '{"models": [{"slug": "gpt-a"}, {"slug": "gpt-b", "x": 1}, {"nope": 1}]}'
-        self.assertEqual(oas_ui.parse_models('codex', codex), ['gpt-a', 'gpt-b'])
-        cursor = 'Available models\n\nauto - Auto (current, default)\ngpt-5 - GPT-5\n'
-        self.assertEqual(oas_ui.parse_models('cursor', cursor), ['auto', 'gpt-5'])
-        self.assertEqual(oas_ui.parse_models('opencode', 'openai/gpt-5\nollama/qwen3:30b\n'), ['openai/gpt-5', 'ollama/qwen3:30b'])
-        self.assertEqual(oas_ui.parse_models('codex', 'not json'), [])
+    def test_flow_has_no_model_screen(self):
+        self.assertNotIn('model', oas_ui.SCREENS)
+        self.assertFalse(hasattr(oas_ui, 'STATIC_MODELS'))
 
-    def test_model_choices_static_and_failure_paths(self):
-        self.assertEqual(oas_ui.model_choices('claude')[:3], ['claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5'])
-        self.assertIn('fable', oas_ui.model_choices('claude'))
-        self.assertEqual(oas_ui.model_choices('nonesuch'), [])
-        ran = []
-        class R:
-            returncode = 0
-            stdout = 'a-model - A\n'
-        self.assertEqual(oas_ui.model_choices('cursor', run=lambda cmd, **kw: ran.append(cmd) or R()), ['a-model'])
-        self.assertEqual(ran, [['cursor-agent', '--list-models']])
-        def boom(cmd, **kw):
-            raise OSError('missing')
-        self.assertEqual(oas_ui.model_choices('codex', run=boom), [])
-        class Bad(R):
-            returncode = 1
-        self.assertEqual(oas_ui.model_choices('opencode', run=lambda cmd, **kw: Bad()), [])
+

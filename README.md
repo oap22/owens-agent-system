@@ -22,7 +22,7 @@ For substantial work, start with one agent at appropriate effort. When delegatio
 python3 scripts/oas.py run development --agent claude --workspace /absolute/path/to/project --task "Use the task contract in .oas/<id>/task.json" --lead-effort high --worker-model claude-sonnet-5 --worker-effort low
 ```
 
-`--lead-effort` sets the lead session's reasoning effort; `--worker-model` and `--worker-effort` define the `implementor` role (a Claude Code subagent passed inline, or a Codex role layer written under the workspace's ignored `.oas/roles/`). Set both: a Claude Code subagent with no effort of its own inherits the lead's. Add `--worker-retry-effort medium` to launch a second rung, `implementor-retry`, on the same cheap model at higher effort, or `--worker-retry-model ID` to escalate that rung to a stronger model; the lead re-sends a failed packet to it once before taking the slice itself. Codex and Claude only; other adapters refuse the options. The lead delegates by task packet and verifies from diffs, per [[docs/token-economy]] and [[templates/task-packet]]. Model choices remain explicit; current examples and tuning guidance are in [[docs/models]].
+`--lead-effort` sets the lead session's reasoning effort; `--worker-model` and `--worker-effort` define the `implementor` role (a Claude Code subagent passed inline, or a Codex role layer written under the workspace's ignored `.oas/roles/`). Set both: a Claude Code subagent with no effort of its own inherits the lead's. Add `--worker-retry-effort medium` to launch a second rung, `implementor-retry`, on the same cheap model at higher effort, or `--worker-retry-model ID` to escalate that rung to a stronger model; the lead re-sends a failed packet to it once before taking the slice itself. Codex and Claude only; other adapters refuse the options. The lead delegates by task packet and verifies from diffs, per [[docs/token-economy]] and [[templates/task-packet]]. Model ids pass through to the agent's CLI unchecked; OAS keeps no model list.
 
 `preview` also prints an estimated token count for the guidance and task it would send. After a task, `python3 scripts/oas.py log-run --output /path/.oas ...` records the configuration, result, and cost, and `report-runs` prints cost per completed task by configuration, which is the number that decides whether the split stays.
 
@@ -91,7 +91,7 @@ Run `python3 -m unittest discover -s tests -v` and `python3 scripts/oas.py check
 
 The initial defaults are evidence-informed, not demonstrated optimal. Judge them against your own completed tasks using [[evals/README]]. Never promote a prompt change solely because its author says it improved.
 
-See [[docs/architecture]], [[docs/permissions]], [[docs/setup]], [[docs/personalization]], [[docs/models]], [[docs/audit-2026-09-15]], [[docs/token-economy]], and [[docs/retrospective]] for the design and adoption path. Read [[docs/instruction-authoring]] before editing a prompt, workflow, role, or skill description.
+See [[docs/architecture]], [[docs/permissions]], [[docs/setup]], [[docs/personalization]], [[docs/audit-2026-09-15]], [[docs/token-economy]], and [[docs/retrospective]] for the design and adoption path. Read [[docs/instruction-authoring]] before editing a prompt, workflow, role, or skill description.
 
 ## Use it in your normal agent sessions
 

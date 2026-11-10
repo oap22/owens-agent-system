@@ -1,10 +1,7 @@
 """Pure state machine for the interactive `oas ui` launcher. No curses import here;
 scripts/oas_screen.py is the thin curses layer that drives this with key names."""
 from __future__ import annotations
-import json
 import os
-import re
-import subprocess
 import sys
 import typing
 from pathlib import Path
@@ -24,13 +21,7 @@ MODE_DESCRIPTIONS = {
     'tutor': 'Coursework and research understanding',
     'unattended': 'Explicitly owned local jobs',
 }
-SCREENS = ('mode', 'agent', 'model', 'workspace', 'browser')
-INHERIT = 'inherit'
-TYPE_MODEL = 'type a model id…'
-ENTRY_FOOTER = '⏎ use  esc cancel'
-# Documented identifiers are choices, not a claim about account access. Aliases remain available.
-STATIC_MODELS = {'claude': ['claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5', 'fable', 'opus', 'sonnet', 'haiku'], 'copilot': ['auto']}
-LIST_COMMANDS = {'codex': ['codex', 'debug', 'models'], 'cursor': ['cursor-agent', '--list-models'], 'opencode': ['opencode', 'models']}
+SCREENS = ('mode', 'agent', 'workspace', 'browser')
 LIST_FOOTER = '↑↓ move  ⏎ select  ⌫ back  q quit'
 WORKSPACE_FOOTER = '↑↓ move  ⏎ launch  ⌫ back  q quit'
 BROWSER_FOOTER = '⏎ open  ⌫ up  space launch here  esc cancel  q quit'
@@ -76,36 +67,6 @@ def _value_after(cmd, flag):
     return None
 
 
-def parse_models(agent, text):
-    """Model ids from a listing command's output; tolerant of noise, empty on anything odd."""
-    try:
-        if agent == 'codex':
-            return [m['slug'] for m in json.loads(text)['models'] if isinstance(m.get('slug'), str)]
-        ids = []
-        for line in text.splitlines():
-            token = line.strip().split(' - ')[0].strip()
-            if token and re.fullmatch(oas.MODEL_PATTERN, token) and token.lower() not in ('available', 'models'):
-                ids.append(token)
-        return ids
-    except (ValueError, KeyError, TypeError, AttributeError):
-        return []
-
-
-def model_choices(agent, run=None, environ=None):
-    """Model ids the launcher offers for agent: live from the CLI where it can list them, static otherwise."""
-    if agent in STATIC_MODELS:
-        return list(STATIC_MODELS[agent])
-    cmd = LIST_COMMANDS.get(agent)
-    if cmd is None:
-        return []
-    run = run or subprocess.run
-    try:
-        result = run([oas.executable(agent, environ), *cmd[1:]], capture_output=True, text=True, timeout=8)
-    except (ValueError, OSError, subprocess.SubprocessError):
-        return []
-    return parse_models(agent, result.stdout) if result.returncode == 0 else []
-
-
 def permission_label(cmd, agent, mode):
     if agent == 'codex':
         return oas.config(mode)['sandbox_mode']
@@ -125,19 +86,16 @@ def permission_label(cmd, agent, mode):
 
 
 class Launcher:
-    def __init__(self, *, home=None, scan_root=None, cwd=None, which=None, environ=None, list_models=None):
+    def __init__(self, *, home=None, scan_root=None, cwd=None, which=None, environ=None):
         self.home = Path.home() if home is None else Path(home)
         self.scan_root = (self.home / 'code') if scan_root is None else Path(scan_root)
         self.cwd = Path(os.getcwd()) if cwd is None else Path(cwd)
         self.which = which
         self.environ = os.environ if environ is None else environ
-        self.list_models = list_models or (lambda agent: model_choices(agent, environ=self.environ))
         self.screen = 'mode'
-        self.cursor = {'mode': 0, 'agent': 0, 'model': 0, 'workspace': 0, 'browser': 0}
+        self.cursor = {'mode': 0, 'agent': 0, 'workspace': 0, 'browser': 0}
         self.mode = None
         self.agent = None
-        self.model = None           # None inherits the agent's own default
-        self.model_entry = None     # str while typing a model id on the model screen
         self.workspace = None
         self.browser_dir = self.home
         self.error = None           # last launch refusal, shown until the next key
@@ -146,7 +104,6 @@ class Launcher:
         self.launch_request = None
         self._workspace_scan = []
         self._agent_cache = None      # (mode, rows) computed on entering the agent screen
-        self._model_cache = None      # (agent, ids) computed on entering the model screen
         self._browser_cache = None    # (dir, rows) recomputed when browser_dir changes
 
     # -- which lookup, deferred so unittest.mock.patch.object(oas.shutil, 'which', ...) applies --
@@ -178,16 +135,6 @@ class Launcher:
                 rows.append(Row(agent, permission_label(cmd, agent, self.mode), None, agent))
         return rows
 
-    def _model_rows(self):
-        rows = [Row(INHERIT, 'your current default', None, None)]
-        for model in (self._model_cache[1] if self._model_cache else []):
-            incompatible = (self.agent == 'claude' and self.mode in ('development', 'research') and
-                            oas.claude_auto_model_known_ineligible(model))
-            rows.append(Row(model, '', 'auto unavailable' if incompatible else None, model))
-        typed = TYPE_MODEL if self.model_entry is None else f'{TYPE_MODEL} {self.model_entry}▏'
-        rows.append(Row(typed, '', None, TYPE_MODEL))
-        return rows
-
     def _workspace_rows(self):
         rows = [Row('.', display_path(self.cwd, self.home), None if self.cwd.is_dir() else 'missing', self.cwd)]
         for p in self._workspace_scan:
@@ -216,8 +163,6 @@ class Launcher:
             if self._agent_cache is None or self._agent_cache[0] != self.mode:
                 self._agent_cache = (self.mode, self._agent_rows())
             return self._agent_cache[1]
-        if self.screen == 'model':
-            return self._model_rows()
         if self.screen == 'workspace':
             return self._workspace_rows()
         if self.screen == 'browser':
@@ -236,15 +181,11 @@ class Launcher:
             parts.append(self.mode)
         if self.agent is not None:
             parts.append(self.agent)
-        if self.model is not None and self.screen != 'model':
-            parts.append(self.model)
         if self.workspace is not None:
             parts.append(display_path(self.workspace, self.home))
         return ' › '.join(parts)
 
     def footer(self):
-        if self.model_entry is not None:
-            return ENTRY_FOOTER
         if self.screen == 'browser':
             return BROWSER_FOOTER
         if self.screen == 'workspace':
@@ -289,18 +230,6 @@ class Launcher:
                     break
         self.cursor['agent'] = idx
 
-    def _enter_model_screen(self):
-        self.screen = 'model'
-        self.model_entry = None
-        if self._model_cache is None or self._model_cache[0] != self.agent:
-            self._model_cache = (self.agent, self.list_models(self.agent))
-        rows = self._model_rows()
-        idx = 0
-        for i, r in enumerate(rows):
-            if self.model is not None and r.value == self.model:
-                idx = i
-        self.cursor['model'] = idx
-
     def _enter_workspace_screen(self):
         self.screen = 'workspace'
         self._workspace_scan = scan_workspaces(self.scan_root, self.cwd)
@@ -324,13 +253,7 @@ class Launcher:
             self._enter_agent_screen()
         elif self.screen == 'agent':
             self.agent = row.value
-            self._enter_model_screen()
-        elif self.screen == 'model':
-            if row.value == TYPE_MODEL:
-                self.model_entry = ''
-            else:
-                self.model = row.value
-                self._enter_workspace_screen()
+            self._enter_workspace_screen()
         elif self.screen == 'workspace':
             if row.value == PICK:
                 self.browser_dir = self.home
@@ -343,10 +266,8 @@ class Launcher:
     def _back(self):
         if self.screen == 'agent':
             self.screen = 'mode'
-        elif self.screen == 'model':
-            self.screen = 'agent'
         elif self.screen == 'workspace':
-            self._enter_model_screen()
+            self.screen = 'agent'
         # 'mode': nothing
 
     def _list_key(self, name):
@@ -389,34 +310,13 @@ class Launcher:
         """Choosing a workspace launches an open session; refusals stay on screen as error."""
         try:
             cmd = oas.launch_command(self.agent, self.mode, self.workspace, '', 'auto', self.home,
-                                     model=self.model, environ=self.environ)
+                                     environ=self.environ)
             self.launch_request = (cmd, oas.workspace_path(self.workspace))
         except ValueError as exc:
             self.error = str(exc)
 
-    def _entry_key(self, name):
-        if name == 'esc':
-            self.model_entry = None
-        elif name == 'enter':
-            text = self.model_entry.strip()
-            if not re.fullmatch(oas.MODEL_PATTERN, text or ''):
-                self.error = 'model id must be letters, digits, . _ : / -'
-                return
-            self.model = text
-            self.model_entry = None
-            self._enter_workspace_screen()
-        elif name == 'backspace':
-            self.model_entry = self.model_entry[:-1]
-        elif name == 'space':
-            pass
-        elif len(name) == 1:
-            self.model_entry += name
-
     def key(self, name):
         self.error = None
-        if self.model_entry is not None:
-            self._entry_key(name)
-            return
         if self.screen == 'browser':
             self._browser_key(name)
         else:

@@ -42,4 +42,4 @@ Local setup sources: [Claude global instructions](https://code.claude.com/docs/e
 - [Opus 5 changes](https://platform.claude.com/docs/en/models/opus-5/whats-new-opus-5), [effort](https://platform.claude.com/docs/en/build-with-claude/effort): stopping conditions, avoiding repeated verification prompts, and fresh effort comparisons.
 - [Cost and intelligence](https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence): lower effort and independent delegation are candidates to measure, not guaranteed savings.
 
-These pages were opened from the primary providers. Model-specific advice is kept in [[docs/models]] and [[docs/token-economy]], outside the automatically loaded prompt. Runtime observations and acceptance evidence are in [[docs/audit-2026-09-15]].
+These pages were opened from the primary providers. Model-specific advice is kept in [[docs/token-economy]], outside the automatically loaded prompt. Runtime observations and acceptance evidence are in [[docs/audit-2026-09-15]].

@@ -193,12 +193,15 @@ def _init_colors(plain):
         curses.use_default_colors()
     except curses.error:
         pass
+    # 'head' and 'text' (the top logo rows and panel text) use the terminal's own
+    # foreground (-1): fixed white vanished on light backgrounds, leaving only the
+    # green lower half of the logo visible.
     if curses.COLORS >= 256:
-        # Rain uses the green ramp; panel text is white, details pale green, disabled gray.
-        values = (15, 46, 40, 34, 22, 196, 231, 120, 245)
+        # Rain uses the green ramp; details pale green, disabled gray.
+        values = (-1, 46, 40, 34, 22, 196, -1, 120, 245)
     else:
-        values = (curses.COLOR_WHITE, curses.COLOR_GREEN, curses.COLOR_GREEN, curses.COLOR_GREEN,
-                  curses.COLOR_GREEN, curses.COLOR_RED, curses.COLOR_WHITE, curses.COLOR_GREEN, curses.COLOR_WHITE)
+        values = (-1, curses.COLOR_GREEN, curses.COLOR_GREEN, curses.COLOR_GREEN,
+                  curses.COLOR_GREEN, curses.COLOR_RED, -1, curses.COLOR_GREEN, curses.COLOR_WHITE)
     for i, fg in enumerate(values, start=1):
         try:
             curses.init_pair(i, fg, -1)
