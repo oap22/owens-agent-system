@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -108,6 +109,60 @@ class SetupTest(unittest.TestCase):
                         self.assertEqual((backups[0] / '.codex/AGENTS.md').read_text(), 'original personal instructions')
                     self.assertIn(str(backups[0]), errors.getvalue())
                     self.assertIn(str(first), errors.getvalue())
+
+    def planned(self):
+        return {str(t.relative_to(self.home)): a.decode() for t, _, a, _ in m.plan(self.home, self.source)}
+
+    def test_every_workflow_installs_as_a_claude_skill(self):
+        self.assertEqual(set(m.WORKFLOW_SKILLS), set(m.oas.MODES))
+        after = self.planned()
+        for mode in m.oas.MODES:
+            text = after[f'.claude/skills/oas-{mode}/SKILL.md']
+            front, body = text.split('\n---\n', 1)
+            self.assertIn(f'name: oas-{mode}', front)
+            self.assertIn('description: "', front)
+            self.assertEqual('disable-model-invocation: true' in front, mode == 'unattended', mode)
+            self.assertIn(str(self.source.resolve()), body)
+            self.assertTrue(body.endswith((self.source / f'workflows/{mode}.md').read_text()), mode)
+        self.assertIn('`oas-development`', after['.claude/CLAUDE.md'])
+
+    def test_workflow_skill_follows_workflow_edits_and_stays_idempotent(self):
+        m.apply(m.plan(self.home, self.source), self.home)
+        self.assertEqual(m.plan(self.home, self.source), [])
+        source = self.home / 'src'
+        shutil.copytree(self.source, source, ignore=shutil.ignore_patterns('.git', '.oas', '.claude', '__pycache__'))
+        (source / 'workflows/tutor.md').write_text('# Tutoring\n\nChanged.\n')
+        after = {str(t.relative_to(self.home)): a.decode() for t, _, a, _ in m.plan(self.home, source)}
+        self.assertTrue(after['.claude/skills/oas-tutor/SKILL.md'].endswith('# Tutoring\n\nChanged.\n'))
+
+    def test_unmanaged_claude_skill_refused(self):
+        p = self.home / '.claude/skills/oas-research/SKILL.md'
+        p.parent.mkdir(parents=True)
+        p.write_text('---\nname: oas-research\ndescription: mine\n---\nmine\n')
+        with self.assertRaises(ValueError):
+            m.plan(self.home, self.source)
+        self.assertEqual(p.read_text(), '---\nname: oas-research\ndescription: mine\n---\nmine\n')
+
+    def test_symlinked_claude_skill_refused(self):
+        p = self.home / '.claude/skills/oas-ops'
+        p.parent.mkdir(parents=True)
+        (self.home / 'elsewhere').mkdir()
+        p.symlink_to(self.home / 'elsewhere')
+        with self.assertRaises(ValueError):
+            m.plan(self.home, self.source)
+        self.assertEqual(list((self.home / 'elsewhere').iterdir()), [])
+
+    def test_skill_listing_budget_set_but_user_value_wins(self):
+        self.assertEqual(json.loads(self.planned()['.claude/settings.json'])['skillListingBudgetFraction'], 0.02)
+        p = self.home / '.claude/settings.json'
+        p.parent.mkdir()
+        p.write_text(json.dumps({'skillListingBudgetFraction': 0.03}))
+        self.assertEqual(json.loads(self.planned()['.claude/settings.json'])['skillListingBudgetFraction'], 0.03)
+
+    def test_rollback_removes_installed_workflow_skills(self):
+        backup = m.apply(m.plan(self.home, self.source), self.home)
+        m.rollback_apply(m.rollback_plan(self.home, backup))
+        self.assertFalse((self.home / '.claude/skills/oas-development/SKILL.md').exists())
 
     def test_merge_keeps_other_settings(self):
         self.assertEqual(m.merged({'permissions':{'allow':['Read']},'model':'mine'},{'permissions':{'disableBypassPermissionsMode':'disable'}}),{'permissions':{'allow':['Read'],'disableBypassPermissionsMode':'disable'},'model':'mine'})
@@ -272,9 +327,9 @@ class SetupTest(unittest.TestCase):
         _,backup=self.install()
         before=self.snapshot()
         actions=m.rollback_plan(self.home,backup)
-        # one global instruction file per agent, one Codex profile per mode,
-        # the three settings patches, and the oas launcher
-        self.assertEqual(len(actions),len(m.oas.GLOBAL_INSTRUCTIONS)+len(m.oas.MODES)+5+1)
+        # one global instruction file per agent, one Codex profile and one Claude
+        # workflow skill per mode, the settings patches, and the oas launcher
+        self.assertEqual(len(actions),len(m.oas.GLOBAL_INSTRUCTIONS)+2*len(m.oas.MODES)+5+1)
         self.assertEqual(self.snapshot(),before)
         out=subprocess.run([sys.executable,str(self.source/'scripts/setup.py'),'--home',str(self.home),'--rollback',str(backup)],capture_output=True,text=True,check=True).stdout
         self.assertIn('restore: .claude/CLAUDE.md',out);self.assertIn('remove: .codex/AGENTS.md',out);self.assertIn('preview only',out)

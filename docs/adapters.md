@@ -43,7 +43,7 @@ The Claude desktop app has three tabs. Only the **Code** tab runs Claude Code. I
 | OAS piece | Desktop Code tab (local session) | Why |
 |---|---|---|
 | Managed block in `~/.claude/CLAUDE.md` | Expected to load | Desktop and the CLI share CLAUDE.md memory. The docs name project files explicitly; confirm the user file by asking a Desktop session which workflow source its instructions name |
-| Workflow selection | Works through the managed block | The block names the source clone and tells the agent to read the relevant workflow; the Mac clone path must exist |
+| Workflow selection | Loads as a skill | Setup installs each workflow as `~/.claude/skills/oas-<mode>/SKILL.md`, generated from `workflows/<mode>.md`; Claude loads the matching one on demand. `oas-unattended` is user-invocable only. Rerun setup after editing a workflow |
 | `~/.claude/settings.json` (`disableBypassPermissionsMode`, permission rules, hooks, `env`) | Applies | Settings files are shared |
 | Skills symlinked into `~/.claude/skills/` | Load | Local sessions load personal skills from that folder |
 | MCP servers in `~/.claude.json` or `.mcp.json` | Load | Desktop also adds servers from `claude_desktop_config.json` |

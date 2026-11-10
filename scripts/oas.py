@@ -1004,7 +1004,7 @@ def routed_skills():
     return names
 
 
-def check(skills_root=None):
+def check(skills_root=None, claude_skills=None):
     for mode in MODES:
         cfg = config(mode)
         if cfg['sandbox_mode'] == 'danger-full-access':
@@ -1043,6 +1043,14 @@ def check(skills_root=None):
         for name in sorted(routed_skills()):
             if not (skills_root / name).is_dir():
                 print(f'WARNING: routed skill `{name}` has no directory under {skills_root}', file=sys.stderr)
+        # A skill in the repo still needs a Claude target in the skills manifest;
+        # vault-only skills load only in sessions started inside the vault.
+        claude_skills = Path(claude_skills) if claude_skills else Path.home() / '.claude/skills'
+        if claude_skills.is_dir():
+            missing = sorted(n for n in routed_skills() if (skills_root / n).is_dir() and not (claude_skills / n).exists())
+            if missing:
+                print(f'WARNING: routed skills not installed for Claude Code in {claude_skills}: {", ".join(missing)}; '
+                      'sessions outside the vault cannot load them', file=sys.stderr)
         # session-handoff carries a copy of the handoff template; warn when the two drift apart.
         copy = skills_root / 'session-handoff/handoff-template.md'
         if not copy.is_file() or copy.read_bytes() != (ROOT / 'templates/handoff.md').read_bytes():

@@ -505,11 +505,12 @@ class OASTest(unittest.TestCase):
         copy.write_bytes((oas.ROOT / 'templates/handoff.md').read_bytes())
         err = io.StringIO()
         with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
-            oas.check(skills_root=skills)
+            oas.check(skills_root=skills, claude_skills=skills)
         self.assertEqual(err.getvalue(), '')
         (skills / 'plan-then-ship').rmdir()
         err, out = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out), \
+                patch.object(oas.Path, 'home', return_value=self.root / 'empty-home'):
             self.assertEqual(oas.main(['check', '--skills-root', str(skills)]), 0)
         self.assertIn('WARNING: routed skill `plan-then-ship`', err.getvalue())
         self.assertNotIn('research-loop', err.getvalue())
@@ -518,6 +519,26 @@ class OASTest(unittest.TestCase):
         with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(oas.main(['check', '--skills-root', str(self.root / 'absent')]), 0)
         self.assertIn('skills repo not present; routing check skipped', err.getvalue())
+
+    def test_routed_skill_missing_for_claude_warns(self):
+        skills, claude = self.root / 'skills', self.root / 'claude-skills'
+        for name in oas.routed_skills():
+            (skills / name).mkdir(parents=True)
+            (claude / name).mkdir(parents=True)
+        (skills / 'session-handoff/handoff-template.md').write_bytes((oas.ROOT / 'templates/handoff.md').read_bytes())
+        (claude / 'research-loop').rmdir()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            oas.check(skills_root=skills, claude_skills=claude)
+        self.assertIn('not installed for Claude Code', err.getvalue())
+        self.assertIn('research-loop', err.getvalue())
+        self.assertNotIn('plan-then-ship', err.getvalue())
+        # A skill missing from the repo is reported once, by the repo check, not again for Claude.
+        (skills / 'research-loop').rmdir()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            oas.check(skills_root=skills, claude_skills=claude)
+        self.assertNotIn('not installed for Claude Code', err.getvalue())
 
     def test_handoff_template_copy_drift(self):
         skills = self.root / 'skills'
