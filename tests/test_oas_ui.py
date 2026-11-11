@@ -841,3 +841,13 @@ class RuntimeSelectionTest(unittest.TestCase):
         self.assertFalse(hasattr(oas_ui, 'STATIC_MODELS'))
 
 
+class DeletedCwdTest(OASUITestBase):
+    def test_agent_screen_survives_a_deleted_current_directory(self):
+        launcher = self.make(cwd=self.root / 'gone')
+        launcher.key('enter')
+        self.assertEqual(launcher.screen, 'agent')
+        self.assertTrue(any(not row.disabled for row in launcher.rows()))
+        launcher.key('enter')
+        self.assertEqual(launcher.rows()[0].disabled, 'missing')
+
+

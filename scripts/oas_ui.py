@@ -136,7 +136,9 @@ class Launcher:
             if self.mode == 'unattended' and agent != 'codex':
                 rows.append(Row(agent, '', 'codex only', agent))
                 continue
-            cmd = oas.command(agent, self.mode, self.cwd, 'placeholder', shared='never')
+            # The command is built only for its permission label, which does not depend on
+            # the workspace; a deleted current directory must not crash the screen.
+            cmd = oas.command(agent, self.mode, self.cwd if self.cwd.is_dir() else self.home, 'placeholder', shared='never')
             try:
                 selected = oas.executable(agent, self.environ)
             except ValueError:

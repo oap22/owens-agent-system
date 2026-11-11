@@ -1356,3 +1356,40 @@ class RetrospectiveTest(unittest.TestCase):
         self.assertIn('Name the file and quote the line when an instruction blocks progress.', contract)
         for gotcha in ('/bin/ls', 'find ... | while read'):
             self.assertIn(gotcha, contract)
+
+
+class AuditRegressionTest(unittest.TestCase):
+    """Defects reproduced by the 2026-11-10 audit."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+
+    def test_credential_pattern_ignores_hyphenated_names_and_still_catches_tokens(self):
+        for harmless in ('- Evidence: branch task-fix-the-failing-csv-import', 'see `evals/risk-register-for-unattended-jobs.md`',
+                         'disk-space-cleanup-procedure-notes'):
+            self.assertIsNone(oas.SECRET_PATTERN.search(harmless), harmless)
+        for secret in ('key sk-' + 'a' * 24, 'ghp_' + 'A' * 24, '`github_pat_' + 'b' * 24, 'AKIA' + 'A' * 16,
+                       'Authorization: Bearer ' + 'c' * 24, '-----BEGIN RSA PRIVATE KEY'):
+            self.assertIsNotNone(oas.SECRET_PATTERN.search(secret), secret)
+
+    def test_report_runs_names_the_line_of_a_record_without_task_or_harness(self):
+        log = self.root / oas.RUN_LOG; log.parent.mkdir(parents=True)
+        log.write_text('\n{"result": "pass", "task": "t"}\n', encoding='utf-8')
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(oas.main(['report-runs', '--output', str(self.root)]), 2)
+        self.assertIn('line 2: a run record needs task and harness text', err.getvalue())
+
+    def test_copilot_bypass_check_reads_the_supplied_environment(self):
+        with patch.object(oas.shutil, 'which', return_value='/bin/copilot'), patch.object(oas.Path, 'home', return_value=self.root):
+            with self.assertRaisesRegex(ValueError, 'allow-all'):
+                oas.launch_command('copilot', 'ops', self.root, 'Task', 'never', environ={'COPILOT_ALLOW_ALL': 'true'})
+            self.assertEqual(oas.launch_command('copilot', 'ops', self.root, 'Task', 'never', environ={})[0], 'copilot')
+
+    def test_check_fails_on_a_wikilink_to_a_missing_file(self):
+        self.assertEqual(oas.broken_links(), [])
+        (self.root / 'docs').mkdir()
+        (self.root / 'docs/present.md').write_text('See [[docs/gone]] and [[README|the readme]].\n', encoding='utf-8')
+        (self.root / 'README.md').write_text('See [[docs/present#part]].\n', encoding='utf-8')
+        self.assertEqual(oas.broken_links(self.root), ['docs/present.md: [[docs/gone]]'])

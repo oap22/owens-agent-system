@@ -76,7 +76,9 @@ ISSUE_TITLE_PREFIX = 'Retrospective: '
 ISSUE_TITLE_LIMIT = 256     # GitHub issue title limit
 ISSUE_BODY_LIMIT = 65536    # GitHub issue body limit
 # Heuristic only: shapes of common credentials that must never reach a public issue.
-SECRET_PATTERN = re.compile(r'gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY|Bearer [A-Za-z0-9._-]{20,}')
+# A token must start at a word boundary: without it `sk-` matches inside ordinary
+# hyphenated names such as `task-fix-the-failing-csv-import`.
+SECRET_PATTERN = re.compile(r'(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16})|-----BEGIN [A-Z ]*PRIVATE KEY|Bearer [A-Za-z0-9._-]{20,}')
 
 
 def executable(agent, environ=None):
@@ -407,7 +409,8 @@ def launch_command(agent, mode, workspace, task, shared='auto', home=None, *, en
         raise ValueError(f'{cmd[0]} is not installed; use bundle or install its official CLI')
     # Copilot supports permission-bypass environment variables. Fail closed,
     # without silently rewriting the caller's environment.
-    if agent == 'copilot' and any(os.environ.get(k, '').lower() in ('1', 'true') for k in ('COPILOT_ALLOW_ALL', 'COPILOT_PLAN_THEN_AUTOPILOT')):
+    env = os.environ if environ is None else environ
+    if agent == 'copilot' and any(env.get(k, '').lower() in ('1', 'true') for k in ('COPILOT_ALLOW_ALL', 'COPILOT_PLAN_THEN_AUTOPILOT')):
         raise ValueError('Remove Copilot allow-all/autopilot environment overrides before launch')
     return cmd
 
@@ -713,10 +716,12 @@ def report_runs(output):
     """Per configuration: runs, passes, cost per completed task, unknown-cost runs, packets escalated."""
     path = Path(output).expanduser().resolve() / RUN_LOG
     groups = {}
-    for line in read(path).splitlines():
+    for number, line in enumerate(read(path).splitlines(), 1):
         if not line.strip():
             continue
         record = json.loads(line)
+        if not isinstance(record, dict) or any(not isinstance(record.get(key), str) for key in ('task', 'harness')):
+            raise ValueError(f'{path} line {number}: a run record needs task and harness text')
         row = groups.setdefault(configuration_key(record), dict(label=configuration_label(record), runs=0, completed=set(), cost=0.0, costed=0, unknown=0, packets=0, escalated=0, corrections=0))
         row['runs'] += 1
         if record.get('result') == 'pass':
@@ -1151,6 +1156,21 @@ def exported_skills(skills_repo):
     return names
 
 
+LINKED_DOCS = ('*.md', 'docs/**/*.md', 'templates/*.md', 'evals/*.md', 'workflows/*.md', 'prompts/*.md')
+
+
+def broken_links(root=None):
+    """Sorted 'file: [[target]]' for each wikilink in the kit's Markdown that names no file in the repository."""
+    root = ROOT if root is None else Path(root)
+    broken = set()
+    for pattern in LINKED_DOCS:
+        for path in root.glob(pattern):
+            for target in re.findall(r'\[\[([^\]|#]+)', read(path)):
+                if not (root / f'{target.strip()}.md').is_file():
+                    broken.add(f'{path.relative_to(root)}: [[{target}]]')
+    return sorted(broken)
+
+
 def check(skills_root=None, claude_skills=None):
     for mode in MODES:
         cfg = config(mode)
@@ -1180,6 +1200,9 @@ def check(skills_root=None, claude_skills=None):
         raise ValueError('templates/retrospective.md must keep the title line, the four sections in order, and its placeholders')
     if 'Unfilled placeholder: <task title>' not in validate_retro(ROOT / RETRO_TEMPLATE):
         raise ValueError('The unfilled retrospective template must fail verification on its placeholders')
+    links = broken_links()
+    if links:
+        raise ValueError('Wikilinks to files that do not exist: ' + '; '.join(links))
     sizes, over = guidance_report()
     for mode in over:
         print(f'WARNING: {mode} guidance with shared prompts is about {sizes[mode]} tokens, over the {GUIDANCE_BUDGET_TOKENS} budget; trim before every launch pays for it', file=sys.stderr)

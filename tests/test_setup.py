@@ -416,4 +416,25 @@ class SetupTest(unittest.TestCase):
         self.assertEqual(subprocess.run(['sh', '-n', str(wrapper)], capture_output=True).returncode, 0)
         self.assertEqual(m.plan(self.home, self.source), [])
 
+    def test_settings_keep_their_bytes_when_parsed_content_is_unchanged(self):
+        m.apply(m.plan(self.home,self.source),self.home)
+        target=self.home/'.claude/settings.json'
+        data=json.loads(target.read_text(encoding='utf-8'));data['note']='café — raw'
+        # Another writer's formatting and raw UTF-8 are not a pending update.
+        target.write_text(json.dumps(data,indent=4,ensure_ascii=False),encoding='utf-8')
+        self.assertEqual(m.plan(self.home,self.source),[])
+        data['env']['CLAUDE_AUTOCOMPACT_PCT_OVERRIDE']='90';target.write_text(json.dumps(data,ensure_ascii=False),encoding='utf-8')
+        (path,_,after,_),=m.plan(self.home,self.source)
+        self.assertEqual(path,target)
+        self.assertIn('café — raw',after.decode('utf-8'))
+    def test_non_object_settings_are_refused_by_name(self):
+        for relative,content in (('.gemini/settings.json','{"model": "gemini-x"}'),('.cursor/cli-config.json','[]')):
+            with tempfile.TemporaryDirectory() as tmp:
+                home=Path(tmp).resolve();target=home/relative;target.parent.mkdir(parents=True);target.write_text(content,encoding='utf-8')
+                with self.assertRaisesRegex(ValueError,'Cannot update '+relative.replace('.','[.]')):m.plan(home,self.source)
+                result=subprocess.run([sys.executable,str(self.source/'scripts/setup.py'),'--home',str(home)],capture_output=True,text=True)
+                self.assertEqual(result.returncode,2)
+                self.assertTrue(result.stderr.startswith('ERROR: Cannot update '+relative),result.stderr)
+                self.assertNotIn('Traceback',result.stderr)
+
 if __name__=='__main__':unittest.main()

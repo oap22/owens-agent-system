@@ -40,6 +40,8 @@ def managed(original, content):
 
 
 def merged(base, overlay):
+    if not isinstance(base, dict):
+        raise ValueError(f'Refusing to merge settings into a non-object value: {base!r}')
     out = dict(base)
     for k, v in overlay.items():
         out[k] = merged(out.get(k, {}), v) if isinstance(v, dict) else v
@@ -213,11 +215,20 @@ def plan(home, source, runtimes=None):
         patches.setdefault(relative, {})
     for relative, patch in patches.items():
         def update(old, patch=patch, relative=relative):
-            base = json.loads(old) if old.strip() else {}
-            out = merged(base, patch)
+            try:
+                base = json.loads(old) if old.strip() else {}
+                out = merged(base, patch)
+            except ValueError as error:
+                raise ValueError(f'Cannot update {relative}: {error}') from None
             if relative == '.claude/settings.json':
                 out.setdefault('skillListingBudgetFraction', SKILL_LISTING_BUDGET)
-            return json.dumps(with_hook(out, hook) if relative in COMPACTION_HOOK_FILES else out, indent=2) + '\n'
+            if relative in COMPACTION_HOOK_FILES:
+                out = with_hook(out, hook)
+            # Leave the file's own bytes alone when nothing changes: another writer's
+            # formatting or raw UTF-8 is not a pending update.
+            if old.strip() and out == base:
+                return old
+            return json.dumps(out, indent=2, ensure_ascii=False) + '\n'
         add(relative, update)
     # Remember explicit runtime choices across subsequent installer runs.
     wrapper_path = home / '.local/bin/oas'
@@ -402,4 +413,10 @@ def main():
         backup=apply(changes,home)
         print(f'Applied. Backup: {backup}' if backup else 'Already current.')
 
-if __name__=='__main__': main()
+if __name__=='__main__':
+    try:
+        main()
+    except ValueError as error:
+        # A refusal is an expected outcome; print it without a traceback.
+        print(f'ERROR: {error}', file=sys.stderr)
+        sys.exit(2)
