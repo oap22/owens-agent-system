@@ -2,7 +2,7 @@
 
 The shared contract is `prompts/core.md` and `prompts/owen.md`; setup installs it in each agent's global instructions, so read those files only when they are not already loaded. Load the workflow for the task's mode. These are behavioral instructions, not additional permissions. Respect the host's instruction hierarchy and the user's current authorization.
 
-This is a solo project. Owen is the only contributor: commit on the worktree branch, merge it into `main` locally, and do not open a pull request.
+This is a solo project. Owen is the only contributor: commit on the worktree branch, merge it into `main` locally, and do not open a pull request. Pushing `main` to `origin` is authorized (standing instruction from 2026-11-10) once `check` and the unit tests exit 0 on the merged commit; a force push is not.
 
 For changes to this repository, use an isolated git worktree. Keep task artifacts in ignored `.oas/` folders. Validate with `python3 scripts/oas.py check` and `python3 -m unittest discover -s tests -v`. Never copy vault notes, credentials, or runtime account state into commits.
 
